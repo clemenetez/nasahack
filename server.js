@@ -1,69 +1,58 @@
 import express from "express";
-import cors from "cors";
+import fetch from "node-fetch"; // або використай built-in fetch в Node 20+
+import bodyParser from "body-parser";
 
 const app = express();
-const PORT = 5500;
+app.use(bodyParser.json());
 
-// Middlewares
-app.use(cors());
-app.use(express.json()); // щоб читати JSON body
+const GEMINI_API_KEY = "AIzaSyDh-wxUUl1-fktdTQMB8h1XS63afcXu6oc"; // ключ з .env
 
-// POST /api/ai/suggest
-app.post("/api/ai/suggest", (req, res) => {
-  const layout = req.body.layout || {};
-  const activeModule = layout.activeModule || {};
-  const objects = activeModule.objects || [];
+app.post("/api/ai/suggest", async (req, res) => {
+  const layout = req.body.layout;
+  if (!layout) return res.status(400).json({ error: "No layout provided" });
 
-  console.log("Received objects:", objects);
+  // Генеруємо промпт для Gemini
+  const prompt = `
+You are a habitat layout assistant. Analyze the following habitat module and suggest improvements in English. 
+Provide hints, warnings, and errors for object placement, corridor clearance, access zones, and overall efficiency.
 
-  const suggestions = [];
+Module layout JSON:
+${JSON.stringify(layout, null, 2)}
 
-  if (objects.length === 0) {
-    // Якщо об’єктів немає — базові підказки
-    suggestions.push({
-      category: "General",
-      importance: "high",
-      short: "Empty layout",
-      detail: "No objects found in the active module. Add some to get meaningful suggestions."
+Return an array of objects: [{type: "hint"|"warn"|"error", msg: "Your suggestion"}]
+`;
+
+  try {
+    const response = await fetch("https://api.gemini.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GEMINI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gemini-1.5",
+        input: prompt,
+      }),
     });
-  } else {
-    // Для кожного об’єкта формуємо "Gemini"-структуру
-    objects.forEach(o => {
-      suggestions.push({
-        category: "Object",
-        importance: "medium",
-        short: `Found ${o.type}`,
-        detail: `Object "${o.type}" at (${o.x},${o.y}), size: ${o.w}x${o.h}`
-      });
 
-      // Додаткові Geminі-поради
-      if (o.type === "bed") {
-        suggestions.push({
-          category: "Advice",
-          importance: "high",
-          short: "Bed placement",
-          detail: "Consider placing the bed away from noisy panels for better crew rest."
-        });
-      }
-      if (o.type === "kitchen") {
-        suggestions.push({
-          category: "Advice",
-          importance: "medium",
-          short: "Kitchen proximity",
-          detail: "Keep the kitchen near the dining area for efficiency."
-        });
-      }
-    });
+    const data = await response.json();
+    // Витягуємо текст із Gemini (може бути nested)
+    const text = data.output_text || "No suggestions generated";
+
+    // Пробуємо парсити як JSON масив підказок
+    let suggestions;
+    try {
+      suggestions = JSON.parse(text);
+    } catch {
+      // Якщо не JSON, обертаємо у масив з одним hint
+      suggestions = [{ type: "hint", msg: text }];
+    }
+
+    res.json(suggestions);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json([{ type: "error", msg: "Failed to contact Gemini API" }]);
   }
-
-  res.json(suggestions);
 });
 
-// Health check
-app.get("/api/health", (req, res) => {
-  res.send({ status: "ok" });
-});
-
-app.listen(PORT, () => {
-  console.log(`AI server running at http://localhost:${PORT}`);
-});
+app.listen(3000, () => console.log("Server running on http://localhost:3000"));
