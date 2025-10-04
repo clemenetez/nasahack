@@ -10,7 +10,7 @@ app.use(cors()); // дозволяємо CORS для всіх доменів
 app.use(bodyParser.json());
 
 // Замініть на свій реальний Gemini API Key
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDh-wxUUl1-fktdTQMB8h1XS63afcXu6oc";
 
 // ---------------- Helper: prompt generation ----------------
 function generatePrompt(layout) {
