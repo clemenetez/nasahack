@@ -1,40 +1,41 @@
-// server.js — AI proxy на порті 5000
+// server.js
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
 
 const app = express();
+const PORT = 5000; // сервер на окремому порту
+
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json());
 
-const API_KEY = "AIzaSyDh-wxUUl1-fktdTQMB8h1XS63afcXu6oc";
+// POST /api/ai/suggest — повертає підказки AI
+app.post("/api/ai/suggest", (req, res) => {
+  const layout = req.body.layout;
 
-app.post("/api/ai/suggest", async (req, res) => {
-  const { layout } = req.body || {};
+  // Проста "AI логіка": перевірка на відсутність базових об'єктів
+  const suggestions = [];
+  const objects = layout?.activeModule?.objects || [];
 
-  if (!API_KEY) {
-    // Локальний fallback
-    const suggestions = [];
-    const objs = layout?.objects || [];
-    if (objs.length === 0) suggestions.push({ type:"hint", msg:"Layout is empty. Add Bed and Panel." });
-    if (!objs.some(o=>o.type==="cabinet")) suggestions.push({ type:"hint", msg:"Consider adding a Cabinet for storage." });
-    return res.json(suggestions);
-  }
+  const hasBed = objects.some(o => o.type === "bed");
+  const hasPanel = objects.some(o => o.type === "panel");
+  const hasCabinet = objects.some(o => o.type === "cabinet");
+  const hasKitchen = objects.some(o => o.type === "kitchen");
+  const hasExercise = objects.some(o => o.type === "exercise");
+  const hasPrivate = objects.some(o => o.type === "private");
 
-  try {
-    const prompt = `You are an expert in NASA habitable module layout. Given this JSON layout, list concise issues and suggestions. JSON:\n${JSON.stringify(layout)}`;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
-    const body = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-    const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
-    const data = await r.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "No response";
+  if (!hasBed) suggestions.push({ type: "hint", msg: "Add at least a Bed for sleeping." });
+  if (!hasPanel) suggestions.push({ type: "hint", msg: "Add a Panel for control systems." });
+  if (!hasCabinet) suggestions.push({ type: "hint", msg: "Add a Cabinet for storage." });
+  if (!hasKitchen) suggestions.push({ type: "hint", msg: "Add a Kitchen for food preparation." });
+  if (!hasExercise) suggestions.push({ type: "hint", msg: "Add an Exercise area for crew health." });
+  if (!hasPrivate) suggestions.push({ type: "hint", msg: "Add Private Space for psychological comfort." });
 
-    const suggestions = text.split(/\n+/).filter(Boolean).map(line => ({ type:"hint", msg: line.replace(/^\-+\s?/, "") }));
-    res.json(suggestions);
-  } catch (err) {
-    res.json([{ type:"error", msg: String(err) }]);
-  }
+  // Завжди додаємо приклад перевірки правил
+  suggestions.push({ type: "hint", msg: "Ensure corridors are clear for movement." });
+
+  res.json(suggestions);
 });
 
-const PORT = 5000; // інший порт!
-app.listen(PORT, () => console.log(`AI proxy listening on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`AI server listening at http://localhost:${PORT}`);
+});
