@@ -1,72 +1,82 @@
-// server.js
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch"; // якщо Node <18, інакше можна без нього
+import bodyParser from "body-parser";
+import fetch from "node-fetch";
 
 const app = express();
-app.use(cors()); // дозволяємо запити з будь-якого походження
-app.use(express.json());
+const PORT = 5000;
 
-const GEMINI_API_KEY = "AIzaSyDh-wxUUl1-fktdTQMB8h1XS63afcXu6oc"; // встав свій ключ
-const GEMINI_URL = "https://api.gemini.com/v1/ai"; // заміни на актуальний endpoint
+app.use(cors()); // дозволяємо CORS для всіх доменів
+app.use(bodyParser.json());
 
-// Функція для генерації промпта для Gemini на основі layout
+// Замініть на свій реальний Gemini API Key
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
+
+// ---------------- Helper: prompt generation ----------------
 function generatePrompt(layout) {
-  const { activeModule, objects } = layout;
-  let prompt = `You are an AI assistant that reviews 2D habitat layouts.\n`;
-  prompt += `Module: ${activeModule.name}, size ${activeModule.w}x${activeModule.h}, corridor at x:${activeModule.corridor.x}, y:${activeModule.corridor.y}, w:${activeModule.corridor.w}, h:${activeModule.corridor.h}\n`;
-  prompt += `Objects in module:\n`;
-  objects.forEach(o => {
-    prompt += `- ${o.type} at x:${o.x}, y:${o.y}, w:${o.w}, h:${o.h}\n`;
-  });
-  prompt += `\nProvide suggestions in English for better placement, avoiding overlaps, corridor obstruction, and access zone issues. Use concise bullet points.`;
-  return prompt;
+  const activeModule = layout.activeModule || {};
+  const objects = layout.objects || [];
+
+  let text = `You are an AI assistant helping design a 2D space habitat. Evaluate the layout and provide actionable suggestions in short sentences in English. Only output suggestions, one per line. Do not explain or add extra text.\n\n`;
+  text += `Active module dimensions: ${activeModule.w}x${activeModule.h}\n`;
+  text += `Corridor: ${JSON.stringify(activeModule.corridor)}\n`;
+  text += `Objects in the module:\n`;
+  for (const o of objects) {
+    text += `- ${o.type} at (${o.x},${o.y}) size ${o.w}x${o.h}\n`;
+  }
+  text += `\nProvide suggestions for better placement, accessibility, and free space.`;
+  return text;
 }
 
-// Функція для відправки промпта в Gemini
+// ---------------- Helper: call Gemini API ----------------
 async function sendToGemini(prompt) {
-  const response = await fetch(GEMINI_URL, {
+  const response = await fetch("https://api.gemini.com/v1/assistant", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${GEMINI_API_KEY}`
+      "Authorization": `Bearer ${GEMINI_API_KEY}`,
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      prompt: prompt,
-      max_tokens: 200
+      model: "gemini-1.5",
+      prompt,
+      temperature: 0.5,
+      max_tokens: 300
     })
   });
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Gemini API error: ${errText}`);
+    throw new Error(`Gemini API error: ${response.status} ${errText}`);
   }
 
   const data = await response.json();
-  // Припустимо Gemini повертає текст у data.text
-  return data.text || "No suggestions returned";
+  // В залежності від формату Gemini, підлаштуй:
+  // може бути data.text або data.choices[0].message.content
+  return data?.text || data?.choices?.[0]?.message?.content || "";
 }
 
-// Маршрут для отримання підказок
+// ---------------- API endpoint ----------------
 app.post("/api/ai/suggest", async (req, res) => {
   const layout = req.body.layout;
-  if (!layout) return res.status(400).json({ error: "No layout provided" });
+  if (!layout) return res.status(400).json([{ type: "error", msg: "No layout provided" }]);
 
   try {
     const prompt = generatePrompt(layout);
     const aiText = await sendToGemini(prompt);
 
-    // Розділяємо на окремі підказки (можна адаптувати)
-    const suggestions = aiText.split("\n").filter(line => line.trim()).map(msg => ({ type: "hint", msg }));
+    const suggestions = aiText
+      .split("\n")
+      .filter(line => line.trim())
+      .map(msg => ({ type: "hint", msg }));
 
     res.json(suggestions);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    // Завжди повертаємо масив, навіть при помилці
+    res.status(500).json([{ type: "error", msg: err.message }]);
   }
 });
 
-const PORT = 5000;
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
 });
