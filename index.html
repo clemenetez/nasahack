@@ -80,6 +80,14 @@
         <button id="btn-rotate">↻ Rotate (R)</button>
         <button id="btn-duplicate">⧉ Duplicate (Ctrl+D)</button>
         <button id="btn-delete">🗑️ Delete (Del)</button>
+        <button id="btn-undo">↶ Undo (Ctrl+Z)</button>
+        <button id="btn-redo">↷ Redo (Ctrl+Y)</button>
+      </div>
+      <h2>Cable Tools</h2>
+      <div class="tools" id="cable-tools" style="display: none;">
+        <button id="btn-add-cable-point" class="tool">➕ Add Point (+)</button>
+        <button id="btn-remove-cable-point" class="tool">➖ Remove Point (-)</button>
+        <button id="btn-delete-cable" class="tool">🗑️ Delete Cable</button>
       </div>
       <h2>Statistics</h2>
       <div class="stats-panel">
@@ -118,7 +126,8 @@
       </section>
       <footer>
         <small>
-          Objects snap to grid. Tips: drag from catalog, select with click, rotate (R), delete (Del).
+          Objects snap to grid. Tips: drag from catalog, select with click, rotate (R), delete (Del), undo (Ctrl+Z). 
+          Cable tools: select cable to edit points, use +/- to add/remove points, drag points to move them.
         </small>
       </footer>
     </main>

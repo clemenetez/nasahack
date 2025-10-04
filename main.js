@@ -57,7 +57,10 @@ let state = {
   aiSource: "local",
   viewMode: "single", // "single" | "overview"
   overviewScale: 0.5,
-  connections: [] // Array of connections between modules
+  connections: [], // Array of connections between modules
+  history: [], // Undo history
+  historyIndex: -1, // Current position in history
+  maxHistorySize: 50 // Maximum number of undo states
 };
 
 // Helper functions for module management
@@ -69,6 +72,76 @@ function getActiveObjects() {
   return getActiveModule()?.objects || [];
 }
 
+// Undo/Redo functionality
+function saveToHistory() {
+  // Remove any history after current index (when new action is performed after undo)
+  if (state.historyIndex < state.history.length - 1) {
+    state.history = state.history.slice(0, state.historyIndex + 1);
+  }
+  
+  // Create deep copy of current state
+  const historyState = {
+    modules: JSON.parse(JSON.stringify(state.modules)),
+    activeModuleId: state.activeModuleId,
+    connections: JSON.parse(JSON.stringify(state.connections)),
+    timestamp: Date.now()
+  };
+  
+  // Add to history
+  state.history.push(historyState);
+  state.historyIndex = state.history.length - 1;
+  
+  // Limit history size
+  if (state.history.length > state.maxHistorySize) {
+    state.history.shift();
+    state.historyIndex--;
+  }
+}
+
+function undo() {
+  if (state.historyIndex > 0) {
+    state.historyIndex--;
+    const historyState = state.history[state.historyIndex];
+    
+    // Restore state
+    state.modules = JSON.parse(JSON.stringify(historyState.modules));
+    state.activeModuleId = historyState.activeModuleId;
+    state.connections = JSON.parse(JSON.stringify(historyState.connections));
+    
+    // Clear selections
+    state.selectedId = null;
+    state.selectedModuleId = null;
+    state.cableDraft = null;
+    
+    // Update UI
+    renderModuleList();
+    render();
+    saveState();
+  }
+}
+
+function redo() {
+  if (state.historyIndex < state.historyIndex.length - 1) {
+    state.historyIndex++;
+    const historyState = state.history[state.historyIndex];
+    
+    // Restore state
+    state.modules = JSON.parse(JSON.stringify(historyState.modules));
+    state.activeModuleId = historyState.activeModuleId;
+    state.connections = JSON.parse(JSON.stringify(historyState.connections));
+    
+    // Clear selections
+    state.selectedId = null;
+    state.selectedModuleId = null;
+    state.cableDraft = null;
+    
+    // Update UI
+    renderModuleList();
+    render();
+    saveState();
+  }
+}
+
 // Auto-save to localStorage
 function saveState() {
   localStorage.setItem('habitat-layout', JSON.stringify({
@@ -76,7 +149,9 @@ function saveState() {
     activeModuleId: state.activeModuleId,
     aiSource: state.aiSource,
     connections: state.connections,
-    viewMode: state.viewMode
+    viewMode: state.viewMode,
+    history: state.history,
+    historyIndex: state.historyIndex
   }));
 }
 
@@ -95,6 +170,8 @@ function loadState() {
       state.aiSource = data.aiSource || "local";
       state.connections = data.connections || [];
       state.viewMode = data.viewMode || "single";
+      state.history = data.history || [];
+      state.historyIndex = data.historyIndex !== undefined ? data.historyIndex : -1;
       $("#ai-source").value = state.aiSource;
     }
   } catch (e) {
@@ -120,6 +197,7 @@ function addObject(type, x, y) {
   const t = CATALOG[type];
   const activeModule = getActiveModule();
   if (activeModule) {
+    saveToHistory(); // Save state before adding object
     // Convert global coordinates to module-relative coordinates
     const moduleX = x - activeModule.x;
     const moduleY = y - activeModule.y;
@@ -169,6 +247,28 @@ function objectsAtPoint(x, y) {
   }
   
   return hits;
+}
+
+function getCablePointAtPoint(x, y, cableId) {
+  const objects = getActiveObjects();
+  const activeModule = getActiveModule();
+  const cable = objects.find(o => o.id === cableId && o.type === "cable");
+  
+  if (!cable || !cable.points) return null;
+  
+  // Check if clicking on a control point
+  for (let i = 0; i < cable.points.length; i++) {
+    const pt = cable.points[i];
+    const ptX = activeModule.x + pt.x;
+    const ptY = activeModule.y + pt.y;
+    const dist = Math.sqrt((x - ptX) ** 2 + (y - ptY) ** 2);
+    
+    if (dist < 10) { // Click tolerance for control points
+      return { pointIndex: i, point: pt };
+    }
+  }
+  
+  return null;
 }
 
 function modulesAtPoint(x, y) {
@@ -419,12 +519,32 @@ function drawCable(c) {
     ctx.fillStyle = "#ffd166";
     ctx.strokeStyle = "#ffd166";
     ctx.lineWidth = 2;
-    for (const pt of pts) {
+    for (let i = 0; i < pts.length; i++) {
+      const pt = pts[i];
       ctx.beginPath();
-      ctx.arc(activeModule.x + pt.x, activeModule.y + pt.y, 4, 0, 2 * Math.PI);
+      ctx.arc(activeModule.x + pt.x, activeModule.y + pt.y, 6, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
+      
+      // Draw point index for easier identification
+      ctx.fillStyle = "#000";
+      ctx.font = "10px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText(i.toString(), activeModule.x + pt.x, activeModule.y + pt.y + 3);
+      ctx.fillStyle = "#ffd166";
     }
+    
+    // Draw selection outline
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(activeModule.x + pts[0].x, activeModule.y + pts[0].y);
+    for (let i=1;i<pts.length;i++) {
+      ctx.lineTo(activeModule.x + pts[i].x, activeModule.y + pts[i].y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 
@@ -676,13 +796,38 @@ canvas.addEventListener("mousedown", e => {
     const objects = getActiveObjects();
     const activeModule = getActiveModule();
     const obj = objects.find(o=>o.id===state.selectedId);
-    // Calculate drag offset in global coordinates
-    drag = { 
-      id: obj.id, 
-      dx: pos.x - (activeModule.x + obj.x), 
-      dy: pos.y - (activeModule.y + obj.y),
-      type: "object"
-    };
+    
+    
+    // Check if clicking on a cable control point
+    if (obj && obj.type === "cable") {
+      const cablePoint = getCablePointAtPoint(pos.x, pos.y, obj.id);
+      if (cablePoint) {
+        // Start dragging cable point
+        drag = {
+          id: obj.id,
+          pointIndex: cablePoint.pointIndex,
+          dx: pos.x - (activeModule.x + cablePoint.point.x),
+          dy: pos.y - (activeModule.y + cablePoint.point.y),
+          type: "cablePoint"
+        };
+      } else {
+        // Start dragging entire cable
+        drag = {
+          id: obj.id,
+          dx: 0,
+          dy: 0,
+          type: "cable"
+        };
+      }
+    } else {
+      // Calculate drag offset in global coordinates for regular objects
+      drag = { 
+        id: obj.id, 
+        dx: pos.x - (activeModule.x + obj.x), 
+        dy: pos.y - (activeModule.y + obj.y),
+        type: "object"
+      };
+    }
   } else {
     state.selectedId = null;
   }
@@ -786,11 +931,44 @@ canvas.addEventListener("mousemove", e => {
       obj.y = snap(moduleY);
       render();
     }
+  } else if (drag.type === "cablePoint") {
+    // Move cable point
+    const objects = getActiveObjects();
+    const activeModule = getActiveModule();
+    const cable = objects.find(o=>o.id===drag.id && o.type === "cable");
+    if (cable && cable.points && cable.points[drag.pointIndex]) {
+      // Convert global coordinates to module-relative coordinates
+      const moduleX = pos.x - activeModule.x - drag.dx;
+      const moduleY = pos.y - activeModule.y - drag.dy;
+      cable.points[drag.pointIndex].x = snap(moduleX);
+      cable.points[drag.pointIndex].y = snap(moduleY);
+      render();
+    }
+  } else if (drag.type === "cable") {
+    // Move entire cable
+    const objects = getActiveObjects();
+    const activeModule = getActiveModule();
+    const cable = objects.find(o=>o.id===drag.id && o.type === "cable");
+    if (cable && cable.points) {
+      const deltaX = pos.x - (drag.lastX || pos.x);
+      const deltaY = pos.y - (drag.lastY || pos.y);
+      
+      // Move all points by the delta
+      for (const point of cable.points) {
+        point.x = snap(point.x + deltaX);
+        point.y = snap(point.y + deltaY);
+      }
+      
+      drag.lastX = pos.x;
+      drag.lastY = pos.y;
+      render();
+    }
   }
 });
 
 canvas.addEventListener("mouseup", e => {
   if (drag && state.viewMode !== "overview") {
+    saveToHistory(); // Save state after drag operation
     saveState();
   }
   drag = null;
@@ -802,6 +980,7 @@ canvas.addEventListener("dblclick", e => {
   if (state.tool === "cable" && state.cableDraft && state.cableDraft.points.length >= 2) {
     const activeModule = getActiveModule();
     if (activeModule) {
+      saveToHistory(); // Save state before adding cable
       activeModule.objects.push(state.cableDraft);
       state.selectedId = state.cableDraft.id;
       state.cableDraft = null;
@@ -821,6 +1000,17 @@ document.addEventListener("keydown", e => {
     return;
   }
   
+  // Undo/Redo functionality
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+    e.preventDefault();
+    undo();
+    return;
+  } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+    e.preventDefault();
+    redo();
+    return;
+  }
+  
   if (e.key === "Delete") {
     if (state.tool === "module" && state.selectedModuleId) {
       // Delete selected module
@@ -829,6 +1019,7 @@ document.addEventListener("keydown", e => {
       // Delete selected object
       const activeModule = getActiveModule();
       if (activeModule) {
+        saveToHistory(); // Save state before deletion
         activeModule.objects = activeModule.objects.filter(o=>o.id!==state.selectedId);
         state.selectedId = null;
         saveState();
@@ -840,6 +1031,7 @@ document.addEventListener("keydown", e => {
     const objects = getActiveObjects();
     const obj = objects.find(o=>o.id===state.selectedId);
     if (obj && obj.type !== "cable") {
+      saveToHistory(); // Save state before rotation
       const t = obj.w; obj.w = obj.h; obj.h = t;
       saveState();
       render();
@@ -858,6 +1050,7 @@ document.addEventListener("keydown", e => {
     if (obj) {
       const activeModule = getActiveModule();
       if (activeModule) {
+        saveToHistory(); // Save state before duplication
         const clone = JSON.parse(JSON.stringify(obj));
         clone.id = genId();
         clone.x += GRID; clone.y += GRID;
@@ -866,6 +1059,35 @@ document.addEventListener("keydown", e => {
         saveState();
         render();
       }
+    }
+  } else if (e.key === "+" || e.key === "=") {
+    // Add cable point
+    const objects = getActiveObjects();
+    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
+    if (cable && cable.points && cable.points.length > 0) {
+      saveToHistory(); // Save state before adding point
+      const activeModule = getActiveModule();
+      if (activeModule) {
+        // Add point at the end of the cable
+        const lastPoint = cable.points[cable.points.length - 1];
+        cable.points.push({
+          x: lastPoint.x + GRID,
+          y: lastPoint.y
+        });
+        saveState();
+        render();
+      }
+    }
+  } else if (e.key === "-" || e.key === "_") {
+    // Remove cable point
+    const objects = getActiveObjects();
+    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
+    if (cable && cable.points && cable.points.length > 2) {
+      saveToHistory(); // Save state before removing point
+      // Remove the last point
+      cable.points.pop();
+      saveState();
+      render();
     }
   }
 });
@@ -1018,6 +1240,7 @@ function markToolActive() {
 
 // Module management functions
 function addModule(templateKey = 'standard', customConfig = null) {
+  saveToHistory(); // Save state before adding module
   const moduleCount = state.modules.length;
   let template, moduleName, moduleColor, moduleType, corridorWidth;
   
@@ -1092,6 +1315,8 @@ function deleteModule(moduleId) {
     alert("Cannot delete the last module!");
     return;
   }
+  
+  saveToHistory(); // Save state before deleting module
   
   // Remove module
   state.modules = state.modules.filter(m => m.id !== moduleId);
@@ -1612,6 +1837,81 @@ function updateOverviewButton() {
     deleteBtn.style.display = "none";
   }
 }
+
+// Cable tools event listeners
+$("#btn-add-cable-point").addEventListener("click", () => {
+  const objects = getActiveObjects();
+  const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
+  if (cable && cable.points && cable.points.length > 0) {
+    saveToHistory(); // Save state before adding point
+    const activeModule = getActiveModule();
+    if (activeModule) {
+      // Add point at the end of the cable
+      const lastPoint = cable.points[cable.points.length - 1];
+      cable.points.push({
+        x: lastPoint.x + GRID,
+        y: lastPoint.y
+      });
+      saveState();
+      render();
+    }
+  }
+});
+
+$("#btn-remove-cable-point").addEventListener("click", () => {
+  const objects = getActiveObjects();
+  const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
+  if (cable && cable.points && cable.points.length > 2) {
+    saveToHistory(); // Save state before removing point
+    // Remove the last point
+    cable.points.pop();
+    saveState();
+    render();
+  }
+});
+
+$("#btn-delete-cable").addEventListener("click", () => {
+  if (state.selectedId) {
+    const objects = getActiveObjects();
+    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
+    if (cable) {
+      const activeModule = getActiveModule();
+      if (activeModule) {
+        saveToHistory(); // Save state before deletion
+        activeModule.objects = activeModule.objects.filter(o=>o.id!==state.selectedId);
+        state.selectedId = null;
+        saveState();
+        render();
+      }
+    }
+  }
+});
+
+// Undo/Redo button event listeners
+$("#btn-undo").addEventListener("click", undo);
+$("#btn-redo").addEventListener("click", redo);
+
+
+// Function to update cable tools visibility
+function updateCableToolsVisibility() {
+  const cableTools = $("#cable-tools");
+  if (!cableTools) return;
+  
+  const objects = getActiveObjects();
+  const selectedObj = objects.find(o=>o.id===state.selectedId);
+  
+  if (selectedObj && selectedObj.type === "cable") {
+    cableTools.style.display = "block";
+  } else {
+    cableTools.style.display = "none";
+  }
+}
+
+// Wrap render to update cable tools visibility
+const originalRender = render;
+render = function() {
+  originalRender();
+};
 
 // initial draw
 loadState();

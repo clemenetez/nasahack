@@ -23,6 +23,10 @@
 #btn-edit-module:hover{background:#d97706}
 #btn-delete-module{background:#dc2626}
 #btn-delete-module:hover{background:#b91c1c}
+#btn-undo,#btn-redo{background:#6b7280;color:white;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:14px;margin:2px 0}
+#btn-undo:hover,#btn-redo:hover{background:#4b5563}
+#cable-tools .tool{background:#19212b;color:#e6e6e6;border:1px solid #283241;border-radius:10px;padding:10px;cursor:pointer;margin:2px 0}
+#cable-tools .tool:hover{background:#202a35}
 
 /* Modal Styles */
 .modal{display:none;position:fixed;z-index:1000;left:0;top:0;width:100%;height:100%;background-color:rgba(0,0,0,0.8);backdrop-filter:blur(4px)}
