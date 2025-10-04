@@ -11,38 +11,72 @@
     <aside class="sidebar">
       <h2>Catalog</h2>
       <div class="catalog">
-        <h3>Basic Systems</h3>
-        <button class="item" data-type="bed">🛏️ Bed</button>
-        <button class="item" data-type="panel">🖥️ Panel</button>
-        <button class="item" data-type="cabinet">📦 Cabinet</button>
-        <button class="item" data-type="cable">🧵 Cable (polyline)</button>
+        <div class="category-group">
+          <button class="category-btn" data-category="basic">🔧 Basic Systems</button>
+          <div class="category-menu" id="basic-menu" style="display: none;">
+            <button class="item" data-type="bed">🛏️ Bed</button>
+            <button class="item" data-type="panel">🖥️ Panel</button>
+            <button class="item" data-type="cabinet">📦 Cabinet</button>
+            <button class="item" data-type="cable">🧵 Cable (polyline)</button>
+          </div>
+        </div>
         
-        <h3>Food Systems</h3>
-        <button class="item" data-type="kitchen">🍳 Kitchen</button>
-        <button class="item" data-type="dining">🍽️ Dining</button>
-        <button class="item" data-type="storage">📦 Storage</button>
+        <div class="category-group">
+          <button class="category-btn" data-category="food">🍽️ Food Systems</button>
+          <div class="category-menu" id="food-menu" style="display: none;">
+            <button class="item" data-type="kitchen">🍳 Kitchen</button>
+            <button class="item" data-type="dining">🍽️ Dining</button>
+            <button class="item" data-type="storage">📦 Storage</button>
+          </div>
+        </div>
         
-        <h3>Life Support</h3>
-        <button class="item" data-type="atmosphere">🌬️ Atmosphere Control</button>
-        <button class="item" data-type="monitor">📊 Monitor</button>
+        <div class="category-group">
+          <button class="category-btn" data-category="life">🌬️ Life Support</button>
+          <div class="category-menu" id="life-menu" style="display: none;">
+            <button class="item" data-type="atmosphere">🌬️ Atmosphere Control</button>
+            <button class="item" data-type="monitor">📊 Monitor</button>
+          </div>
+        </div>
         
-        <h3>Exercise & Recreation</h3>
-        <button class="item" data-type="exercise">💪 Exercise</button>
-        <button class="item" data-type="recreation">🎮 Recreation</button>
+        <div class="category-group">
+          <button class="category-btn" data-category="exercise">💪 Exercise & Recreation</button>
+          <div class="category-menu" id="exercise-menu" style="display: none;">
+            <button class="item" data-type="exercise">💪 Exercise</button>
+            <button class="item" data-type="recreation">🎮 Recreation</button>
+          </div>
+        </div>
         
-        <h3>Psychology & Privacy</h3>
-        <button class="item" data-type="private">🔒 Private Space</button>
-        <button class="item" data-type="communication">📡 Comm Station</button>
+        <div class="category-group">
+          <button class="category-btn" data-category="psychology">🧠 Psychology & Privacy</button>
+          <div class="category-menu" id="psychology-menu" style="display: none;">
+            <button class="item" data-type="private">🔒 Private Space</button>
+            <button class="item" data-type="communication">📡 Comm Station</button>
+          </div>
+        </div>
       </div>
       <h2>Modules</h2>
       <div class="modules-panel">
         <div id="module-list"></div>
+        <div class="module-templates">
+          <label>Template:</label>
+          <select id="module-template">
+            <option value="standard">Standard</option>
+            <option value="compact">Compact</option>
+            <option value="large">Large</option>
+            <option value="wide">Wide</option>
+            <option value="tall">Tall</option>
+          </select>
+        </div>
         <button id="btn-add-module">➕ Add Module</button>
+        <button id="btn-edit-module" style="display: none;">✏️ Edit Module</button>
+        <button id="btn-delete-module" style="display: none;">🗑️ Delete Module</button>
+        <button id="btn-overview">👁️ Overview Mode</button>
       </div>
       <h2>Tools</h2>
       <div class="tools">
         <button id="tool-select" class="tool active">🖱️ Select/Move (V)</button>
         <button id="tool-cable" class="tool">🧵 Cable Tool (C)</button>
+        <button id="tool-module" class="tool">🏗️ Module Tool (M)</button>
         <button id="btn-rotate">↻ Rotate (R)</button>
         <button id="btn-duplicate">⧉ Duplicate (Ctrl+D)</button>
         <button id="btn-delete">🗑️ Delete (Del)</button>
@@ -84,12 +118,116 @@
       </section>
       <footer>
         <small>
-          Corridor (must stay clear) is shown as a dashed area. Objects snap to grid.
-          Tips: drag from catalog, select with click, rotate (R), delete (Del).
+          Objects snap to grid. Tips: drag from catalog, select with click, rotate (R), delete (Del).
         </small>
       </footer>
     </main>
   </div>
+  
+  <!-- Module Configuration Modal -->
+  <div id="module-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>🏗️ Configure New Module</h2>
+        <span class="close">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="module-name">Module Name:</label>
+          <input type="text" id="module-name" value="New Module" placeholder="Enter module name">
+        </div>
+        
+        <div class="form-group">
+          <label for="module-template-select">Template:</label>
+          <select id="module-template-select">
+            <option value="standard">Standard (1000x600)</option>
+            <option value="compact">Compact (800x500)</option>
+            <option value="large">Large (1200x700)</option>
+            <option value="wide">Wide (1400x500)</option>
+            <option value="tall">Tall (800x900)</option>
+            <option value="custom">Custom Size</option>
+          </select>
+        </div>
+        
+        <div class="form-group" id="custom-size-group" style="display: none;">
+          <label for="module-width">Width:</label>
+          <input type="number" id="module-width" min="200" max="2000" value="1000">
+          <label for="module-height">Height:</label>
+          <input type="number" id="module-height" min="150" max="1500" value="600">
+        </div>
+        
+        <div class="form-group">
+          <label for="module-color">Module Color:</label>
+          <input type="color" id="module-color" value="#0d1b26">
+        </div>
+        
+        <div class="form-group">
+          <label for="module-type">Module Type:</label>
+          <select id="module-type">
+            <option value="habitat">🏠 Habitat Module</option>
+            <option value="laboratory">🔬 Laboratory</option>
+            <option value="storage">📦 Storage Module</option>
+            <option value="greenhouse">🌱 Greenhouse</option>
+            <option value="gym">💪 Exercise Module</option>
+            <option value="medical">🏥 Medical Bay</option>
+          </select>
+        </div>
+        
+      </div>
+      <div class="modal-footer">
+        <button id="btn-create-module" class="btn-primary">Create Module</button>
+        <button id="btn-cancel-module" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Module Edit Modal -->
+  <div id="edit-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>✏️ Edit Module</h2>
+        <span class="close-edit">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="edit-module-name">Module Name:</label>
+          <input type="text" id="edit-module-name" placeholder="Enter module name">
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-module-width">Width:</label>
+          <input type="number" id="edit-module-width" min="200" max="2000">
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-module-height">Height:</label>
+          <input type="number" id="edit-module-height" min="150" max="1500">
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-module-color">Module Color:</label>
+          <input type="color" id="edit-module-color">
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-module-type">Module Type:</label>
+          <select id="edit-module-type">
+            <option value="habitat">🏠 Habitat Module</option>
+            <option value="laboratory">🔬 Laboratory</option>
+            <option value="storage">📦 Storage Module</option>
+            <option value="greenhouse">🌱 Greenhouse</option>
+            <option value="gym">💪 Exercise Module</option>
+            <option value="medical">🏥 Medical Bay</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-module" class="btn-primary">Save Changes</button>
+        <button id="btn-cancel-edit" class="btn-secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
   <script src="main.js"></script>
 </body>
 </html>
