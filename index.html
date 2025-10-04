@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Habitat Layout Creator — MVP</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <h2>Catalog</h2>
+      <div class="catalog">
+        <h3>Basic Systems</h3>
+        <button class="item" data-type="bed">🛏️ Bed</button>
+        <button class="item" data-type="panel">🖥️ Panel</button>
+        <button class="item" data-type="cabinet">📦 Cabinet</button>
+        <button class="item" data-type="cable">🧵 Cable (polyline)</button>
+        
+        <h3>Food Systems</h3>
+        <button class="item" data-type="kitchen">🍳 Kitchen</button>
+        <button class="item" data-type="dining">🍽️ Dining</button>
+        <button class="item" data-type="storage">📦 Storage</button>
+        
+        <h3>Life Support</h3>
+        <button class="item" data-type="atmosphere">🌬️ Atmosphere Control</button>
+        <button class="item" data-type="monitor">📊 Monitor</button>
+        
+        <h3>Exercise & Recreation</h3>
+        <button class="item" data-type="exercise">💪 Exercise</button>
+        <button class="item" data-type="recreation">🎮 Recreation</button>
+        
+        <h3>Psychology & Privacy</h3>
+        <button class="item" data-type="private">🔒 Private Space</button>
+        <button class="item" data-type="communication">📡 Comm Station</button>
+      </div>
+      <h2>Modules</h2>
+      <div class="modules-panel">
+        <div id="module-list"></div>
+        <button id="btn-add-module">➕ Add Module</button>
+      </div>
+      <h2>Tools</h2>
+      <div class="tools">
+        <button id="tool-select" class="tool active">🖱️ Select/Move (V)</button>
+        <button id="tool-cable" class="tool">🧵 Cable Tool (C)</button>
+        <button id="btn-rotate">↻ Rotate (R)</button>
+        <button id="btn-duplicate">⧉ Duplicate (Ctrl+D)</button>
+        <button id="btn-delete">🗑️ Delete (Del)</button>
+      </div>
+      <h2>Statistics</h2>
+      <div class="stats-panel">
+        <div id="stats-display">
+          <div>Objects: <span id="object-count">0</span></div>
+          <div>Free Space: <span id="free-space">100%</span></div>
+          <div>Issues: <span id="issue-count">0</span></div>
+        </div>
+      </div>
+      <h2>AI Assistant</h2>
+      <div class="ai-panel">
+        <label>Source:
+          <select id="ai-source">
+            <option value="local" selected>Local</option>
+            <option value="gemini">Gemini (proxy)</option>
+          </select>
+        </label>
+        <button id="btn-analyze">Analyze with AI</button>
+        <ul id="ai-suggestions"></ul>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div class="left">
+          <strong>Habitat Layout Creator — MVP</strong>
+        </div>
+        <div class="right">
+          <button id="btn-export">Export JSON</button>
+          <button id="btn-import">Import JSON</button>
+          <input id="import-file" type="file" accept="application/json" hidden />
+          <button id="btn-reset">Reset</button>
+        </div>
+      </header>
+      <section class="canvas-wrap">
+        <canvas id="canvas" width="1100" height="700"></canvas>
+      </section>
+      <footer>
+        <small>
+          Corridor (must stay clear) is shown as a dashed area. Objects snap to grid.
+          Tips: drag from catalog, select with click, rotate (R), delete (Del).
+        </small>
+      </footer>
+    </main>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>

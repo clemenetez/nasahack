@@ -1,0 +1,29 @@
+{
+  "name": "nasa-habitat-layout-creator",
+  "version": "1.0.0",
+  "description": "NASA Habitat Layout Creator - 2D space habitat design tool with AI optimization",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "nasa",
+    "space",
+    "habitat",
+    "layout",
+    "design",
+    "ai",
+    "gemini"
+  ],
+  "author": "NASA Hackathon Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
