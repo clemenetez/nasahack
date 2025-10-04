@@ -698,7 +698,7 @@ async function analyzeAI() {
     }
   } else {
     try {
-      const res = await fetch("/api/ai/suggest", {
+      const res = await fetch("http://localhost:5000/api/ai/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ layout })
