@@ -98,16 +98,7 @@
         </div>
       </div>
       <h2>AI Assistant</h2>
-      <div class="ai-panel">
-        <label>Source:
-          <select id="ai-source">
-            <option value="local" selected>Local</option>
-            <option value="gemini">Gemini (proxy)</option>
-          </select>
-        </label>
-        <button id="btn-analyze">Analyze with AI</button>
-        <ul id="ai-suggestions"></ul>
-      </div>
+<div class="ai-panel"> ... </div>
     </aside>
     <main>
       <header>
@@ -115,6 +106,7 @@
           <strong>Habitat Layout Creator — MVP</strong>
         </div>
         <div class="right">
+          <button id="btn-ai">AI</button>
           <button id="btn-export">Export JSON</button>
           <button id="btn-import">Import JSON</button>
           <input id="import-file" type="file" accept="application/json" hidden />
@@ -237,6 +229,25 @@
     </div>
   </div>
   
+<div id="ai-floating-panel">
+  <div class="ai-header">
+    <h2>AI Assistant</h2>
+    <button id="btn-close-ai">✖</button>
+  </div>
+  <div class="ai-panel">
+    <label>Source:
+      <select id="ai-source">
+        <option value="local" selected>Local</option>
+        <option value="gemini">Gemini (proxy)</option>
+      </select>
+    </label>
+    <button id="btn-analyze">Analyze with AI</button>
+    <ul id="ai-suggestions"></ul>
+  </div>
+</div>
+
+
+
   <script src="main.js"></script>
 </body>
 </html>

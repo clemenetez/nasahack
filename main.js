@@ -1917,3 +1917,17 @@ render = function() {
 loadState();
 renderModuleList();
 render();
+
+document.addEventListener("DOMContentLoaded", () => {
+  const aiPanel = document.getElementById("ai-floating-panel");
+  const btnAI = document.getElementById("btn-ai");
+  const btnCloseAI = document.getElementById("btn-close-ai");
+
+  btnAI.addEventListener("click", () => {
+    aiPanel.classList.toggle("visible");
+  });
+
+  btnCloseAI.addEventListener("click", () => {
+    aiPanel.classList.remove("visible");
+  });
+});
