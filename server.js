@@ -1,82 +1,113 @@
+// server.js — Express proxy for Ollama (Docker)
+// Run: node server.js
+// Env: OLLAMA_HOST=http://localhost:11434  OLLAMA_MODEL=llama3.1  PORT=5000
+
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
 import fetch from "node-fetch";
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
-app.use(cors()); // дозволяємо CORS для всіх доменів
-app.use(bodyParser.json());
+// Ollama settings
+const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2:1b";
 
-// Замініть на свій реальний Gemini API Key
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "AIzaSyDh-wxUUl1-fktdTQMB8h1XS63afcXu6oc";
+app.use(cors());
+app.use(bodyParser.json({ limit: "2mb" }));
 
-// ---------------- Helper: prompt generation ----------------
+// --- Helper: build prompt from your layout object (kept from your current logic) ---
 function generatePrompt(layout) {
-  const activeModule = layout.activeModule || {};
-  const objects = layout.objects || [];
+  const activeModule = layout?.activeModule || {};
+  const objects = Array.isArray(layout?.objects) ? layout.objects : [];
 
-  let text = `You are an AI assistant helping design a 2D space habitat. Evaluate the layout and provide actionable suggestions in short sentences in English. Only output suggestions, one per line. Do not explain or add extra text.\n\n`;
-  text += `Active module dimensions: ${activeModule.w}x${activeModule.h}\n`;
-  text += `Corridor: ${JSON.stringify(activeModule.corridor)}\n`;
-  text += `Objects in the module:\n`;
-  for (const o of objects) {
-    text += `- ${o.type} at (${o.x},${o.y}) size ${o.w}x${o.h}\n`;
+  let text =
+    "You are an AI assistant helping design a 2D space habitat. " +
+    "Evaluate the layout and provide actionable suggestions in short sentences in English. " +
+    "Only output suggestions, one per line. Do not explain or add extra text.\n\n";
+
+  if (activeModule?.w && activeModule?.h) {
+    text += `Active module dimensions: ${activeModule.w}x${activeModule.h}\n`;
   }
-  text += `\nProvide suggestions for better placement, accessibility, and free space.`;
+  if (activeModule?.corridor) {
+    try {
+      text += `Corridor: ${JSON.stringify(activeModule.corridor)}\n`;
+    } catch {}
+  }
+
+  text += "Objects in the module:\n";
+  for (const o of objects) {
+    const { type, x, y, w, h } = o || {};
+    text += `- ${type ?? "object"} at (${x ?? "?"},${y ?? "?"}) size ${w ?? "?"}x${h ?? "?"}\n`;
+  }
+  text += "\nProvide suggestions for better placement, accessibility, and free space.";
   return text;
 }
 
-// ---------------- Helper: call Gemini API ----------------
-async function sendToGemini(prompt) {
-  const response = await fetch("https://api.gemini.com/v1/assistant", {
+// --- Helper: call Ollama REST API ---
+async function sendToOllama(prompt) {
+  const resp = await fetch(`${OLLAMA_HOST}/api/generate`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${GEMINI_API_KEY}`,
-      "Content-Type": "application/json"
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "gemini-1.5",
+      model: OLLAMA_MODEL,
       prompt,
-      temperature: 0.5,
-      max_tokens: 300
-    })
+      stream: false,
+      // options: { temperature: 0.3 } // uncomment to tune
+    }),
   });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API error: ${response.status} ${errText}`);
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => "");
+    throw new Error(`Ollama API error: ${resp.status} ${err}`);
   }
 
-  const data = await response.json();
-  // В залежності від формату Gemini, підлаштуй:
-  // може бути data.text або data.choices[0].message.content
-  return data?.text || data?.choices?.[0]?.message?.content || "";
+  const data = await resp.json();
+  // data.response is a string with the full completion
+  return data?.response || "";
 }
 
-// ---------------- API endpoint ----------------
+// --- API route consumed by your frontend ---
 app.post("/api/ai/suggest", async (req, res) => {
-  const layout = req.body.layout;
-  if (!layout) return res.status(400).json([{ type: "error", msg: "No layout provided" }]);
-
   try {
+    const layout = req.body?.layout;
+    if (!layout) {
+      return res.status(400).json([{ type: "error", msg: "No layout provided" }]);
+    }
+
     const prompt = generatePrompt(layout);
-    const aiText = await sendToGemini(prompt);
+    const aiText = await sendToOllama(prompt);
 
     const suggestions = aiText
       .split("\n")
-      .filter(line => line.trim())
-      .map(msg => ({ type: "hint", msg }));
+      .map((s) => s.trim().replace(/^[-*]\s*/, ""))
+      .filter(Boolean)
+      .map((msg) => ({ type: "hint", msg }));
+
+    // fallback if model returns a paragraph
+    if (suggestions.length === 0 && aiText) {
+      suggestions.push({ type: "hint", msg: aiText.trim() });
+    }
 
     res.json(suggestions);
   } catch (err) {
     console.error(err);
-    // Завжди повертаємо масив, навіть при помилці
-    res.status(500).json([{ type: "error", msg: err.message }]);
+    res.status(500).json([{ type: "error", msg: String(err.message || err) }]);
   }
 });
 
+// --- Simple health endpoint ---
+app.get("/health", async (_req, res) => {
+  res.json({
+    ok: true,
+    provider: "ollama",
+    host: OLLAMA_HOST,
+    model: OLLAMA_MODEL,
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`Server running at http://localhost:${PORT} (model=${OLLAMA_MODEL})`);
+  console.log(`Ollama host: ${OLLAMA_HOST}`);
 });
