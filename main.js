@@ -1303,11 +1303,12 @@ btnAnalyze?.addEventListener("click", async () => {
       const suggestions = validateLayoutLocal();
       renderAISuggestions(suggestions);
     } else {
-      // Проксі на твій бекенд (налаштуй свій server.js, якщо потрібно)
+        const active_module = getActiveModule();
       const layout = {
         modules: state.modules,
-        activeModule: getActiveModule(),
-        objects: getActiveObjects()
+        activeModule: active_module,
+        objects: getActiveObjects(),
+        moduleName: active_module.name
       };
       const res = await fetch("http://localhost:5000/api/ai/suggest", {
         method: "POST",

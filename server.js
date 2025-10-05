@@ -21,11 +21,13 @@ app.use(bodyParser.json({ limit: "2mb" }));
 function generatePrompt(layout) {
   const activeModule = layout?.activeModule || {};
   const objects = Array.isArray(layout?.objects) ? layout.objects : [];
+   const moduleName = layout?.moduleName || activeModule?.name || "Unnamed Module";
 
   let text =
-    "You are an AI assistant helping design a 2D space habitat. " +
+      "You are an AI assistant helping design a 2D space habitat. " +
     "Evaluate the layout and provide actionable suggestions in short sentences in English. " +
     "Only output suggestions, one per line. Do not explain or add extra text.\n\n";
+  text += `Module name: ${moduleName}\n`;
 
   if (activeModule?.w && activeModule?.h) {
     text += `Active module dimensions: ${activeModule.w}x${activeModule.h}\n`;
