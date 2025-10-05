@@ -475,7 +475,7 @@ $("#btn-rotate")?.addEventListener("click", () => {
 
   saveState(); render();
 });
-а
+
 
 $("#btn-duplicate")?.addEventListener("click", () => {
   const m = getActiveModule(); if (!m) return;
