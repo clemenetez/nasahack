@@ -17,6 +17,8 @@ const MIN_MODULE_W = 200, MIN_MODULE_H = 150;
 const MIN_OBJECT_W = 20, MIN_OBJECT_H = 20;
 const HANDLE_WORLD = 8; // handle half-size in world units
 const MAX_ZOOM = 3, MIN_ZOOM = 0.3;
+// Units conversion: 1 m = 100 units (world units)
+const UNITS_PER_METER = 100;
 
 // --------------------------- Catalog & Templates ---------------------------
 const MODULE_TEMPLATES = {
@@ -99,6 +101,9 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const snap  = (v, g = GRID) => Math.round(v / g) * g;
 const genId = () => Math.random().toString(36).slice(2, 9);
+const unitsToMeters = (u) => u / UNITS_PER_METER;
+const metersToUnits = (m) => m * UNITS_PER_METER;
+const areaUnitsToM2 = (u2) => (u2 / (UNITS_PER_METER * UNITS_PER_METER));
 
 function roundRect(x, y, w, h, r, fill = true, stroke = false) {
   const rr = Math.min(r, w * .5, h * .5);
@@ -185,6 +190,55 @@ let state = {
   history: [],
   future: []
 };
+
+// --------------------------- Mission & Specs ---------------------------
+const FUNC_VOLUMES = {
+  perCapita: {
+    Sleep: 10.76,
+    Private: 6.0
+  },
+  shared: {
+    Dining: 10.09,
+    Exercise: 20.0,
+    Kitchen: 10.0,
+    Storage: 12.0,
+    Recreation: 10.0,
+    Communication: 6.0,
+    LifeSupport: 12.0
+  }
+};
+
+const PHYS_SPECS = {
+  bed: { func: "Sleep", minWm: 0.8, minDm: 2.0 },
+  private: { func: "Private", minWm: 1.2, minDm: 1.8 },
+  dining: { func: "Dining", minWm: 1.6, minDm: 1.6 },
+  kitchen: { func: "Kitchen", minWm: 1.6, minDm: 1.0 },
+  storage: { func: "Storage", minWm: 1.0, minDm: 1.0 },
+  exercise: { func: "Exercise", minWm: 2.0, minDm: 1.5 },
+  recreation: { func: "Recreation", minWm: 1.8, minDm: 1.4 },
+  communication: { func: "Communication", minWm: 1.2, minDm: 1.0 },
+  panel: { func: "LifeSupport", minWm: 1.0, minDm: 0.8 },
+  atmosphere: { func: "LifeSupport", minWm: 1.2, minDm: 1.0 },
+  monitor: { func: "LifeSupport", minWm: 1.2, minDm: 0.8 }
+};
+
+// Recommend size from function volume and deck height (meters)
+function recommendSizeMetersFor(type, deckHeightM) {
+  const spec = PHYS_SPECS[type];
+  if (!spec) return null;
+  const func = spec.func;
+  // use per-capita for Sleep/Private, shared otherwise; pick a reasonable share
+  const vol = (FUNC_VOLUMES.perCapita[func] || FUNC_VOLUMES.shared[func] || 0);
+  if (!vol || !deckHeightM) return null;
+  const areaM2 = Math.max(vol / deckHeightM, (spec.minWm||0.8) * (spec.minDm||1.0));
+  // aspect preference: honor minimums, try to keep close to minW:minD ratio
+  const wM = Math.max(spec.minWm || 1.0, Math.sqrt(areaM2));
+  const dM = Math.max(spec.minDm || 1.0, areaM2 / wM);
+  return { wM, dM };
+}
+
+state.mission = state.mission || { crewSize: 4, deckHeightM: 2.4, sizingMode: "manual" };
+state.measure = state.measure || { points: [] };
 
 // --------------------------- Persistence ---------------------------
 function saveState() {
@@ -333,14 +387,13 @@ function resizeModule(id, newW, newH) {
 function addObject(type, x, y) {
   const m = getActiveModule(); if (!m) return;
   const cat = CATALOG[type]; if (!cat) return;
-  const obj = {
-    id: genId(),
-    type,
-    x: snap(x - m.x), // module-relative
-    y: snap(y - m.y),
-    w: cat.w ?? 40,
-    h: cat.h ?? 40
-  };
+  // sizing: use NASA recommendation if sizingMode === 'nasa'
+  let wUnits = cat.w ?? 40, hUnits = cat.h ?? 40;
+  if (state.mission.sizingMode === "nasa") {
+    const rec = recommendSizeMetersFor(type, state.mission.deckHeightM || 2.4);
+    if (rec) { wUnits = metersToUnits(rec.wM); hUnits = metersToUnits(rec.dM); }
+  }
+  const obj = { id: genId(), type, x: snap(x - m.x), y: snap(y - m.y), w: wUnits, h: hUnits };
   let tries = 0;
   while (overlapsAny(obj, obj.id) && tries < 500) {
     // спіраль/зміщення по GRID
@@ -418,6 +471,7 @@ function markToolActive() {
   $("#tool-select")?.classList.toggle("active", state.tool === "select");
   $("#tool-cable")?.classList.toggle("active", state.tool === "cable");
   $("#tool-module")?.classList.toggle("active", state.tool === "module");
+  $("#tool-measure")?.classList.toggle("active", state.tool === "measure");
 }
 
 $("#tool-select")?.addEventListener("click", () => {
@@ -435,6 +489,12 @@ $("#tool-cable")?.addEventListener("click", () => {
 $("#tool-module")?.addEventListener("click", () => {
   state.tool = "module";
   state.selectedModuleId = state.activeModuleId;
+  markToolActive(); render();
+});
+
+$("#tool-measure")?.addEventListener("click", () => {
+  state.tool = "measure";
+  state.measure.points = [];
   markToolActive(); render();
 });
 
@@ -800,7 +860,121 @@ function drawCable(cable, m) {
   ctx.restore();
 }
 
-function drawValidationOverlay(){ /* stub for now */ }
+function computeFunctionVolumes(m) {
+  const map = {};
+  const deck = state.mission.deckHeightM;
+  for (const o of (m.objects || [])) {
+    if (o.type === "cable") continue;
+    const spec = PHYS_SPECS[o.type];
+    if (!spec) continue;
+    const func = spec.func;
+    const areaM2 = areaUnitsToM2(o.w * o.h);
+    const vol = areaM2 * deck;
+    map[func] = (map[func] || 0) + vol;
+  }
+  return map;
+}
+
+function getRequiredVolumes() {
+  const req = {};
+  const crew = Number(state.mission.crewSize || 4);
+  for (const k of Object.keys(FUNC_VOLUMES.perCapita)) req[k] = FUNC_VOLUMES.perCapita[k] * crew;
+  for (const k of Object.keys(FUNC_VOLUMES.shared)) req[k] = (req[k] || 0) + FUNC_VOLUMES.shared[k];
+  return req;
+}
+
+function drawValidationOverlay(){
+  const m = getActiveModule(); if (!m) return;
+  const funcVols = computeFunctionVolumes(m);
+  const req = getRequiredVolumes();
+  const okFunc = {};
+  for (const k of Object.keys(req)) okFunc[k] = (funcVols[k] || 0) >= (req[k] || 0);
+
+  for (const o of m.objects) {
+    if (o.type === "cable") continue;
+    const func = PHYS_SPECS[o.type]?.func;
+    if (!func) continue;
+    // Object-level ergonomics: respect min width/depth
+    const wM = unitsToMeters(o.w), dM = unitsToMeters(o.h);
+    const spec = PHYS_SPECS[o.type];
+    const dimsOk = (wM >= (spec?.minWm||0)) && (dM >= (spec?.minDm||0));
+    const ok = okFunc[func] && dimsOk;
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = ok ? "#22c55e" : "#ef4444";
+    ctx.strokeRect(m.x + o.x, m.y + o.y, o.w, o.h);
+    ctx.restore();
+  }
+
+  // Zoning violations visualization (min 2m between noisy/dirty and sleep/private)
+  const noisy = state.mission.zoningNoisy || ["exercise", "kitchen", "storage"];
+  const sleep = state.mission.zoningSleep || ["bed", "private"];
+  const minDistUnits = (state.mission.zoningMinDistM || 2) * UNITS_PER_METER;
+  const objs = (m.objects || []).filter(o=>o.type !== "cable");
+  for (const a of objs) {
+    for (const b of objs) {
+      if (a.id === b.id) continue;
+      if (!(noisy.includes(a.type) && sleep.includes(b.type))) continue;
+      const ax = m.x + a.x + a.w/2, ay = m.y + a.y + a.h/2;
+      const bx = m.x + b.x + b.w/2, by = m.y + b.y + b.h/2;
+      const d = Math.hypot(ax - bx, ay - by);
+      if (d < minDistUnits) {
+        ctx.save();
+        ctx.setLineDash([6,4]);
+        ctx.strokeStyle = "#ef4444";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+}
+
+function drawScaleBar() {
+  // draw in screen space at bottom-left
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  const margin = 16;
+  const pxPerUnit = view.zoom; // because world unit scaled by view.zoom
+  const meters = 2; // 2 m bar
+  const units = meters * UNITS_PER_METER;
+  const px = units * pxPerUnit;
+  const y = canvas.height - margin - 10;
+  const x = margin;
+  ctx.fillStyle = "#e6e6e6";
+  ctx.strokeStyle = "#e6e6e6";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + px, y);
+  ctx.stroke();
+  ctx.font = "12px system-ui";
+  ctx.fillText(`${meters} m`, x + px + 8, y + 4);
+  ctx.restore();
+}
+
+function drawMeasureOverlay() {
+  const pts = state.measure?.points || [];
+  if (pts.length === 0) return;
+  ctx.save();
+  ctx.setLineDash([6,4]);
+  ctx.strokeStyle = "#93c5fd";
+  ctx.lineWidth = 2;
+  if (pts.length >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
+    ctx.stroke();
+    const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+    const distUnits = Math.hypot(dx, dy);
+    const distM = unitsToMeters(distUnits);
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#e6e6e6";
+    ctx.font = "12px system-ui";
+    ctx.fillText(`${distM.toFixed(2)} m`, (pts[0].x + pts[1].x)/2 + 8, (pts[0].y + pts[1].y)/2 - 8);
+  }
+  ctx.restore();
+}
 
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -815,11 +989,15 @@ function render() {
     drawGrid();
     drawObjects();
     drawValidationOverlay();
+    drawMeasureOverlay();
   }
 
   ctx.restore();
+  drawRulers();
   updateStats();
   updateOverviewButton();
+  updateInspector();
+  drawScaleBar();
 }
 
 // --------------------------- Overview Mode ---------------------------
@@ -860,7 +1038,39 @@ function updateStats() {
   const occArea = m.objects.filter(o=>o.type!=="cable").reduce((a,o)=>a+o.w*o.h,0);
   const free = Math.max(0, 100 - Math.round(occArea/(m.w*m.h)*100));
   $("#free-space") && ($("#free-space").textContent = free + "%");
-  $("#issue-count") && ($("#issue-count").textContent = "0");
+  // count zoning violations
+  const objs = (m.objects||[]).filter(o=>o.type!=="cable");
+  const noisy = state.mission.zoningNoisy || ["exercise", "kitchen", "storage"];
+  const sleep = state.mission.zoningSleep || ["bed", "private"];
+  const minDistUnits = (state.mission.zoningMinDistM || 2) * UNITS_PER_METER;
+  let violations = 0;
+  for (let i=0;i<objs.length;i++){
+    for (let j=i+1;j<objs.length;j++){
+      const a = objs[i], b = objs[j];
+      const pair = (noisy.includes(a.type) && sleep.includes(b.type)) || (noisy.includes(b.type) && sleep.includes(a.type));
+      if (!pair) continue;
+      const ax = a.x + a.w/2, ay = a.y + a.h/2;
+      const bx = b.x + b.w/2, by = b.y + b.h/2;
+      const d = Math.hypot(ax - bx, ay - by);
+      if (d < minDistUnits) violations++;
+    }
+  }
+  $("#issue-count") && ($("#issue-count").textContent = String(violations));
+
+  // Area/Volume totals
+  const areaM2 = areaUnitsToM2(m.w * m.h);
+  const volM3 = areaM2 * (state.mission.deckHeightM || 2.4);
+  $("#total-area-m2") && ($("#total-area-m2").textContent = areaM2.toFixed(2));
+  $("#total-vol-m3") && ($("#total-vol-m3").textContent = volM3.toFixed(2));
+
+  // NASA compliance percent (aggregate across functions)
+  const got = computeFunctionVolumes(m);
+  const req = getRequiredVolumes();
+  const funcs = Object.keys(req);
+  let sumGot = 0, sumReq = 0;
+  for (const k of funcs) { sumGot += (got[k]||0); sumReq += (req[k]||0); }
+  const pct = sumReq > 0 ? Math.min(100, Math.round((sumGot/sumReq)*100)) : 0;
+  $("#nasa-compliance") && ($("#nasa-compliance").textContent = pct + "%");
 }
 function updateOverviewButton() {
   const btn = $("#btn-overview"); if (!btn) return;
@@ -1021,6 +1231,15 @@ canvas.addEventListener("mousedown", (e) => {
     render();
     return;
   }
+
+  if (state.tool === "measure") {
+    const m = getActiveModule(); if (!m) return;
+    const pt = { x: pos.x, y: pos.y };
+    state.measure.points.push(pt);
+    if (state.measure.points.length > 2) state.measure.points = [pt];
+    render();
+    return;
+  }
 });
 
 canvas.addEventListener("mousemove", (e) => {
@@ -1159,6 +1378,11 @@ canvas.addEventListener("mousemove", (e) => {
     drag.lastX = pos.x; drag.lastY = pos.y;
     render();
   }
+  // Update measure preview
+  if (state.tool === "measure" && state.measure.points.length === 1) {
+    state.measure.points[1] = { x: pos.x, y: pos.y };
+    render();
+  }
 });
 
 canvas.addEventListener("mouseup", (e) => {
@@ -1203,6 +1427,10 @@ $("#btn-delete-cable")?.addEventListener("click", () => {
 
 // --------------------------- Init ---------------------------
 render();
+// Initialize Mission Params UI from saved state
+document.getElementById("crew-size") && (document.getElementById("crew-size").value = String(state.mission.crewSize));
+document.getElementById("deck-height") && (document.getElementById("deck-height").value = String(state.mission.deckHeightM));
+document.getElementById("sizing-mode") && (document.getElementById("sizing-mode").value = String(state.mission.sizingMode));
 // ========================= AI PANEL HOOKS ========================= //
 // DOM вузли
 const btnAI = document.getElementById("btn-ai");
@@ -1292,6 +1520,18 @@ function validateLayoutLocal() {
     }
   }
 
+  // 7) Зонування: exercise/kitchen/storage не ближче 2м до sleep/private
+  const noisy = objects.filter(o => ["exercise","kitchen","storage"].includes(o.type));
+  const sleep = objects.filter(o => ["bed","private"].includes(o.type));
+  const minDistUnits = 2 * UNITS_PER_METER;
+  for (const a of noisy) {
+    const ax = a.x + a.w/2, ay = a.y + a.h/2;
+    for (const b of sleep) {
+      const d = Math.hypot(ax - (b.x + b.w/2), ay - (b.y + b.h/2));
+      if (d < minDistUnits) out.push({ type: "warn", msg: `Keep ${a.type} at least 2 m away from ${b.type}.` });
+    }
+  }
+
   return out;
 }
 
@@ -1345,3 +1585,110 @@ function drawStarryBackground() {
 
   ctx.restore(); // повертаємо трансформацію
 }
+
+function drawRulers(){
+  // thin guides on canvas edges
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = "#283241";
+  ctx.fillRect(0, 0, canvas.width, 2); // top
+  ctx.fillRect(0, canvas.height-2, canvas.width, 2); // bottom
+  ctx.fillRect(0, 0, 2, canvas.height); // left
+  ctx.fillRect(canvas.width-2, 0, 2, canvas.height); // right
+  ctx.restore();
+}
+
+// --------------------------- Inspector & Mission Params Wiring ---------------------------
+function updateInspector() {
+  const m = getActiveModule(); if (!m) return;
+  const o = findObjectById(state.selectedId);
+  const inspType = document.getElementById("insp-type");
+  const inspSize = document.getElementById("insp-size");
+  const inspArea = document.getElementById("insp-area");
+  const inspVol = document.getElementById("insp-volume");
+  const inspFunc = document.getElementById("insp-function");
+  const inspNASA = document.getElementById("insp-nasa");
+  if (!o || o.type === "cable") {
+    if (inspType) inspType.textContent = "—";
+    if (inspSize) inspSize.textContent = "—";
+    if (inspArea) inspArea.textContent = "—";
+    if (inspVol) inspVol.textContent = "—";
+    if (inspFunc) inspFunc.textContent = "—";
+    if (inspNASA) inspNASA.textContent = "—";
+    return;
+  }
+  const wM = unitsToMeters(o.w);
+  const dM = unitsToMeters(o.h);
+  const hM = state.mission.deckHeightM || 2.4;
+  const area = areaUnitsToM2(o.w * o.h);
+  const vol = area * hM;
+  const func = PHYS_SPECS[o.type]?.func || "—";
+  const perCap = FUNC_VOLUMES.perCapita[func] || 0;
+  const shared = FUNC_VOLUMES.shared[func] || 0;
+  const totalReq = (perCap ? perCap * (state.mission.crewSize || 4) : 0) + shared;
+  if (inspType) inspType.textContent = CATALOG[o.type]?.name || o.type;
+  if (inspSize) inspSize.textContent = `${wM.toFixed(2)} × ${dM.toFixed(2)} × ${hM.toFixed(2)}`;
+  if (inspArea) inspArea.textContent = area.toFixed(2);
+  if (inspVol) inspVol.textContent = vol.toFixed(2);
+  if (inspFunc) inspFunc.textContent = func;
+  if (inspNASA) inspNASA.textContent = totalReq ? (vol >= totalReq ? "Yes" : "No") : "—";
+}
+
+document.getElementById("crew-size")?.addEventListener("change", (e) => {
+  state.mission.crewSize = Number(e.target.value);
+  saveState(); render();
+});
+document.getElementById("deck-height")?.addEventListener("change", (e) => {
+  state.mission.deckHeightM = Number(e.target.value);
+  saveState(); render();
+});
+document.getElementById("sizing-mode")?.addEventListener("change", (e) => {
+  state.mission.sizingMode = String(e.target.value);
+  saveState(); render();
+});
+document.getElementById("zoning-dist")?.addEventListener("change", (e) => {
+  state.mission.zoningMinDistM = Number(e.target.value);
+  saveState(); render();
+});
+
+function showToast(msg){
+  const el = document.getElementById("toast"); if (!el) return;
+  el.textContent = msg; el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"), 1500);
+}
+document.getElementById("btn-save-params")?.addEventListener("click", () => {
+  saveState(); showToast("Mission parameters saved");
+});
+
+// Presets
+document.getElementById("preset-crew4-lunar")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  state.mission.crewSize = 4; state.mission.deckHeightM = 2.4; state.mission.sizingMode = "nasa";
+  document.getElementById("crew-size").value = "4";
+  document.getElementById("deck-height").value = "2.4";
+  document.getElementById("sizing-mode").value = "nasa";
+  m.objects = [];
+  addObject("bed", m.x + GRID, m.y + GRID);
+  addObject("private", m.x + GRID*3, m.y + GRID);
+  addObject("kitchen", m.x + GRID, m.y + GRID*6);
+  addObject("dining", m.x + GRID*6, m.y + GRID*6);
+  addObject("exercise", m.x + GRID*10, m.y + GRID*2);
+  saveState(); render();
+});
+document.getElementById("preset-crew6-mars")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  state.mission.crewSize = 6; state.mission.deckHeightM = 2.7; state.mission.sizingMode = "nasa";
+  document.getElementById("crew-size").value = "6";
+  document.getElementById("deck-height").value = "2.7";
+  document.getElementById("sizing-mode").value = "nasa";
+  m.objects = [];
+  addObject("bed", m.x + GRID, m.y + GRID);
+  addObject("bed", m.x + GRID*4, m.y + GRID);
+  addObject("private", m.x + GRID*8, m.y + GRID);
+  addObject("kitchen", m.x + GRID, m.y + GRID*8);
+  addObject("dining", m.x + GRID*7, m.y + GRID*8);
+  addObject("exercise", m.x + GRID*12, m.y + GRID*2);
+  addObject("storage", m.x + GRID*12, m.y + GRID*8);
+  saveState(); render();
+});

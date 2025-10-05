@@ -79,6 +79,7 @@
         <button id="tool-select" class="tool active">🖱️ Select/Move (V)</button>
         <button id="tool-cable" class="tool">🧵 Cable Tool (C)</button>
         <button id="tool-module" class="tool">🏗️ Module Tool (M)</button>
+        <button id="tool-measure" class="tool">📏 Measure (Ruler)</button>
         <button id="btn-rotate">↻ Rotate (R)</button>
         <button id="btn-duplicate">⧉ Duplicate (Ctrl+D)</button>
         <button id="btn-delete">🗑️ Delete (Del)</button>
@@ -97,7 +98,55 @@
           <div>Objects: <span id="object-count">0</span></div>
           <div>Free Space: <span id="free-space">100%</span></div>
           <div>Issues: <span id="issue-count">0</span></div>
+          <div>Total Area (m²): <span id="total-area-m2">0</span></div>
+          <div>Total Volume (m³): <span id="total-vol-m3">0</span></div>
+          <div>NASA Compliance: <span id="nasa-compliance">0%</span></div>
         </div>
+      </div>
+      <h2>Mission Params</h2>
+      <div class="modules-panel">
+        <div class="form-group">
+          <label for="crew-size">Crew Size</label>
+          <select id="crew-size">
+            <option value="4">4</option>
+            <option value="6">6</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="deck-height">Deck Height (m)</label>
+          <input id="deck-height" type="number" min="2" max="5" step="0.1" value="2.4">
+        </div>
+        <div class="form-group">
+          <label for="sizing-mode">Sizing Mode</label>
+          <select id="sizing-mode">
+            <option value="manual">Manual</option>
+            <option value="nasa">NASA</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="zoning-dist">Zoning Min Distance (m)</label>
+          <input id="zoning-dist" type="number" min="0" max="10" step="0.1" value="2">
+        </div>
+        <div class="form-group">
+          <button id="preset-crew4-lunar" class="btn-primary">Preset: Crew-4 Lunar</button>
+          <button id="preset-crew6-mars" class="btn-secondary">Preset: Crew-6 Mars</button>
+        </div>
+        <div class="form-group">
+          <button id="btn-save-params" class="btn-primary">Apply / Save Params</button>
+        </div>
+        <div class="form-group">
+          <button id="preset-demo-mars" class="tool">Quick Demo: Mars Transit</button>
+          <button id="preset-demo-lunar" class="tool">Quick Demo: Lunar Base</button>
+        </div>
+      </div>
+      <h2>Inspector</h2>
+      <div class="modules-panel" id="inspector-panel">
+        <div>Type: <span id="insp-type">—</span></div>
+        <div>Size (m): <span id="insp-size">—</span></div>
+        <div>Area (m²): <span id="insp-area">—</span></div>
+        <div>Volume (m³): <span id="insp-volume">—</span></div>
+        <div>Function: <span id="insp-function">—</span></div>
+        <div>Meets NASA: <span id="insp-nasa">—</span></div>
       </div>
       <!-- <h2>AI Assistant</h2>
       <div class="ai-panel"> ... </div> -->
@@ -248,6 +297,8 @@
     <ul id="ai-suggestions"></ul>
   </div>
 </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
 
   <script src="main.js"></script>
 </body>
