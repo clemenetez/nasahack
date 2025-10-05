@@ -341,10 +341,21 @@ function addObject(type, x, y) {
     w: cat.w ?? 40,
     h: cat.h ?? 40
   };
-  m.objects.push(obj);
-  state.selectedId = obj.id;
-  saveState();
-  render();
+  let tries = 0;
+  while (overlapsAny(obj, obj.id) && tries < 500) {
+    // спіраль/зміщення по GRID
+    obj.x += GRID;
+    if (obj.x + obj.w > m.w) { obj.x = 0; obj.y += GRID; }
+    if (obj.y + obj.h > m.h) { obj.y = 0; } // зациклюємося 
+    tries++;
+  }
+  clampObjectToModule(obj);
+  if (!overlapsAny(obj, obj.id)) {
+    m.objects.push(obj);
+    saveState(); render();
+  } else {
+    alert("Немає вільного місця для цього елемента без перекриття.");
+  }
 }
 
 function findObjectById(id) {
@@ -359,6 +370,21 @@ function clampObjectToModule(obj) {
   obj.x = clamp(obj.x, 0, m.w - obj.w);
   obj.y = clamp(obj.y, 0, m.h - obj.h);
 }
+
+// --- Collision helpers ---
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function overlapsAny(candidate, ignoreId) {
+  const objs = getActiveObjects();
+  for (const o of objs) {
+    if (o.id === ignoreId || o.type === "cable") continue;
+    if (rectsOverlap(candidate, o)) return true;
+  }
+  return false;
+}
+
 
 // --------------------------- UI wiring (sidebar/catalog) ---------------------------
 document.addEventListener("click", (e) => {
@@ -413,27 +439,75 @@ $("#tool-module")?.addEventListener("click", () => {
 });
 
 $("#btn-rotate")?.addEventListener("click", () => {
-  const obj = findObjectById(state.selectedId);
-  if (obj && obj.type !== "cable") {
-    saveToHistory();
-    [obj.w, obj.h] = [obj.h, obj.w];
-    clampObjectToModule(obj);
-    saveState(); render();
+  const m = getActiveModule(); if (!m) return;
+  const o = findObjectById(state.selectedId); if (!o || o.type === "cable") return;
+
+  saveToHistory();
+
+  // кандидат після ротації
+  const cand = { x: o.x, y: o.y, w: o.h, h: o.w }; // swap w/h
+  // вписати у модуль
+  cand.w = clamp(cand.w, MIN_OBJECT_W, m.w);
+  cand.h = clamp(cand.h, MIN_OBJECT_H, m.h);
+  cand.x = clamp(cand.x, 0, m.w - cand.w);
+  cand.y = clamp(cand.y, 0, m.h - cand.h);
+
+  if (!overlapsAny(cand, o.id)) {
+    // ок, застосовуємо
+    o.x = cand.x; o.y = cand.y; [o.w, o.h] = [cand.w, cand.h];
+  } else {
+    // спробуємо знайти найближчу вільну клітину по сітці
+    const start = { x: cand.x, y: cand.y };
+    let tries = 0;
+    while (overlapsAny(cand, o.id) && tries < 400) {
+      cand.x += GRID;
+      if (cand.x + cand.w > m.w) { cand.x = 0; cand.y += GRID; }
+      if (cand.y + cand.h > m.h) { cand.y = 0; }
+      tries++;
+    }
+    if (!overlapsAny(cand, o.id)) {
+      o.x = cand.x; o.y = cand.y; [o.w, o.h] = [cand.w, cand.h];
+    } else {
+      // немає місця — відхиляємо
+      // (не змінюємо розміри, залишаємо як було)
+    }
   }
+
+  saveState(); render();
 });
+а
 
 $("#btn-duplicate")?.addEventListener("click", () => {
   const m = getActiveModule(); if (!m) return;
-  const obj = findObjectById(state.selectedId); if (!obj) return;
+  const src = findObjectById(state.selectedId); if (!src || src.type === "cable") return;
+
   saveToHistory();
-  const clone = JSON.parse(JSON.stringify(obj));
+
+  const clone = JSON.parse(JSON.stringify(src));
   clone.id = genId();
-  clone.x = clamp(snap(clone.x + GRID), 0, m.w - clone.w);
-  clone.y = clamp(snap(clone.y + GRID), 0, m.h - clone.h);
+  // стартова пропозиція — зі зсувом по GRID
+  clone.x = clamp(snap(src.x + GRID), 0, m.w - src.w);
+  clone.y = clamp(snap(src.y + GRID), 0, m.h - src.h);
+
+  // шукаємо першу вільну комірку
+  let tries = 0;
+  while (overlapsAny(clone, clone.id) && tries < 600) {
+    clone.x += GRID;
+    if (clone.x + clone.w > m.w) { clone.x = 0; clone.y += GRID; }
+    if (clone.y + clone.h > m.h) { clone.y = 0; } // обхід по сітці
+    tries++;
+  }
+
+  if (overlapsAny(clone, clone.id)) {
+    alert("Немає вільного місця для дубліката без перекриття.");
+    return;
+  }
+
   m.objects.push(clone);
   state.selectedId = clone.id;
   saveState(); render();
 });
+
 
 $("#btn-delete")?.addEventListener("click", () => {
   const m = getActiveModule(); if (!m) return;
@@ -1015,33 +1089,60 @@ canvas.addEventListener("mousemove", (e) => {
     }
   }
   else if (drag.type === "move-object") {
-    const m = getActiveModule(); if (!m) return;
-    const o = findObjectById(drag.id); if (!o) return;
-    o.x = snap(pos.x - m.x - drag.dx);
-    o.y = snap(pos.y - m.y - drag.dy);
-    clampObjectToModule(o);
-    render();
-  }
+  const m = getActiveModule(); if (!m) return;
+  const o = findObjectById(drag.id); if (!o) return;
+
+  // пропонуємо нову позицію
+  const tryX = snap(pos.x - m.x - drag.dx);
+  const tryY = snap(pos.y - m.y - drag.dy);
+
+  // спроба по X
+  const candX = { x: tryX, y: o.y, w: o.w, h: o.h };
+  if (!overlapsAny(candX, o.id)) o.x = tryX;
+
+  // спроба по Y
+  const candY = { x: o.x, y: tryY, w: o.w, h: o.h };
+  if (!overlapsAny(candY, o.id)) o.y = tryY;
+
+  clampObjectToModule(o);
+  render();
+}
+
   else if (drag.type === "resize-object") {
-    const m = getActiveModule(); if (!m) return;
-    const o = findObjectById(drag.id); if (!o) return;
-    let nx = drag.startX, ny = drag.startY, nw = drag.startW, nh = drag.startH;
-    const rx = pos.x - m.x, ry = pos.y - m.y;
-    const dx = rx - drag.startX, dy = ry - drag.startY;
-    switch(drag.handle){
-      case "nw": nx = drag.startX + dx; ny = drag.startY + dy; nw = drag.startW - dx; nh = drag.startH - dy; break;
-      case "ne": ny = drag.startY + dy; nw = drag.startW + dx; nh = drag.startH - dy; break;
-      case "sw": nx = drag.startX + dx; nw = drag.startW - dx; nh = drag.startH + dy; break;
-      case "se": nw = drag.startW + dx; nh = drag.startH + dy; break;
-      case "n":  ny = drag.startY + dy; nh = drag.startH - dy; break;
-      case "s":  nh = drag.startH + dy; break;
-      case "w":  nx = drag.startX + dx; nw = drag.startW - dx; break;
-      case "e":  nw = drag.startW + dx; break;
-    }
-    o.x = snap(nx); o.y = snap(ny); o.w = snap(nw); o.h = snap(nh);
-    clampObjectToModule(o);
-    render();
+  const m = getActiveModule(); if (!m) return;
+  const o = findObjectById(drag.id); if (!o) return;
+  let nx = drag.startX, ny = drag.startY, nw = drag.startW, nh = drag.startH;
+
+  const rx = pos.x - m.x, ry = pos.y - m.y;
+  const dx = rx - drag.startX, dy = ry - drag.startY;
+  switch (drag.handle) {
+    case "nw": nx = drag.startX + dx; ny = drag.startY + dy; nw = drag.startW - dx; nh = drag.startH - dy; break;
+    case "ne": ny = drag.startY + dy; nw = drag.startW + dx; nh = drag.startH - dy; break;
+    case "sw": nx = drag.startX + dx; nw = drag.startW - dx; nh = drag.startH + dy; break;
+    case "se": nw = drag.startW + dx; nh = drag.startH + dy; break;
+    case "n":  ny = drag.startY + dy; nh = drag.startH - dy; break;
+    case "s":  nh = drag.startH + dy; break;
+    case "w":  nx = drag.startX + dx; nw = drag.startW - dx; break;
+    case "e":  nw = drag.startW + dx; break;
   }
+
+  // канд. прямокутник після ресайзу
+  const candidate = { x: snap(nx), y: snap(ny), w: snap(nw), h: snap(nh) };
+  // обмеження мін-розмірів та меж модуля
+  candidate.w = clamp(candidate.w, MIN_OBJECT_W, m.w);
+  candidate.h = clamp(candidate.h, MIN_OBJECT_H, m.h);
+  candidate.x = clamp(candidate.x, 0, m.w - candidate.w);
+  candidate.y = clamp(candidate.y, 0, m.h - candidate.h);
+
+  // якщо НЕ перекриває — приймаємо
+  if (!overlapsAny(candidate, o.id)) {
+    o.x = candidate.x; o.y = candidate.y; o.w = candidate.w; o.h = candidate.h;
+  }
+  // інакше просто ігноруємо крок ресайзу (залишаємо попередні)
+
+  render();
+}
+
   else if (drag.type === "move-cable-point") {
     const m = getActiveModule(); if (!m) return;
     const c = findObjectById(drag.id); if (!c || !c.points) return;
