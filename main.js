@@ -438,6 +438,22 @@ function overlapsAny(candidate, ignoreId) {
   return false;
 }
 
+function totalOverlapArea(rect, ignoreId) {
+  const objs = getActiveObjects();
+  let sum = 0;
+  for (const o of objs) {
+    if (o.id === ignoreId || o.type === "cable") continue;
+    const ix = Math.max(rect.x, o.x);
+    const iy = Math.max(rect.y, o.y);
+    const ax = Math.min(rect.x + rect.w, o.x + o.w);
+    const ay = Math.min(rect.y + rect.h, o.y + o.h);
+    const iw = Math.max(0, ax - ix);
+    const ih = Math.max(0, ay - iy);
+    if (iw > 0 && ih > 0) sum += iw * ih;
+  }
+  return sum;
+}
+
 
 // --------------------------- UI wiring (sidebar/catalog) ---------------------------
 document.addEventListener("click", (e) => {
@@ -1079,6 +1095,10 @@ function updateStats() {
   for (const k of funcs) { sumGot += (got[k]||0); sumReq += (req[k]||0); }
   const pct = sumReq > 0 ? Math.min(100, Math.round((sumGot/sumReq)*100)) : 0;
   $("#nasa-compliance") && ($("#nasa-compliance").textContent = pct + "%");
+  $("#top-obj") && ($("#top-obj").textContent = String(m.objects.filter(o=>o.type!=="cable").length));
+  $("#top-area") && ($("#top-area").textContent = areaM2.toFixed(2));
+  $("#top-vol") && ($("#top-vol").textContent = volM3.toFixed(2));
+  $("#top-nasa") && ($("#top-nasa").textContent = pct + "%");
 }
 function updateOverviewButton() {
   const btn = $("#btn-overview"); if (!btn) return;
@@ -1355,7 +1375,7 @@ canvas.addEventListener("mousemove", (e) => {
   }
 
   // канд. прямокутник після ресайзу
-  const candidate = { x: snap(nx), y: snap(ny), w: snap(nw), h: snap(nh) };
+  const candidate = { x: snap(nx), y: snap(ny), w: snap(nw), h: snap(nh), id: o.id };
   // обмеження мін-розмірів та меж модуля
   candidate.w = clamp(candidate.w, MIN_OBJECT_W, m.w);
   candidate.h = clamp(candidate.h, MIN_OBJECT_H, m.h);
@@ -1363,10 +1383,17 @@ canvas.addEventListener("mousemove", (e) => {
   candidate.y = clamp(candidate.y, 0, m.h - candidate.h);
 
   // якщо НЕ перекриває — приймаємо
+  const hadOverlap = totalOverlapArea({ x: o.x, y: o.y, w: o.w, h: o.h }, o.id) > 0;
+  const willOverlapArea = totalOverlapArea(candidate, o.id);
   if (!overlapsAny(candidate, o.id)) {
     o.x = candidate.x; o.y = candidate.y; o.w = candidate.w; o.h = candidate.h;
+  } else if (hadOverlap && willOverlapArea >= 0) {
+    // дозволяємо рух, якщо зменшує площу перекриття при зменшенні розмірів
+    const prevOverlapArea = totalOverlapArea({ x: o.x, y: o.y, w: o.w, h: o.h }, o.id);
+    if (willOverlapArea < prevOverlapArea) {
+      o.x = candidate.x; o.y = candidate.y; o.w = candidate.w; o.h = candidate.h;
+    }
   }
-  // інакше просто ігноруємо крок ресайзу (залишаємо попередні)
 
   render();
 }

@@ -8,6 +8,8 @@
 .item,.tool,header button,.ai-panel button{background:#19212b;color:#e6e6e6;border:1px solid #283241;border-radius:10px;padding:10px;cursor:pointer}
 .item:hover,.tool:hover,header button:hover,.ai-panel button:hover{background:#202a35}
 .tool.active{outline:2px solid #5aa9ff}
+.item:focus,.tool:focus,header button:focus,.ai-panel button:focus{outline:3px solid #5aa9ff;outline-offset:2px}
+.item:focus-visible,.tool:focus-visible,header button:focus-visible,.ai-panel button:focus-visible{outline:3px solid #5aa9ff}
 .ai-panel,.stats-panel,.modules-panel{display:flex;flex-direction:column;gap:8px}
 .modules-panel{background:#19212b;border:1px solid #283241;border-radius:10px;padding:10px}
 .module-item{background:#0c1116;border:1px solid #283241;border-radius:6px;padding:8px;margin:4px 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
@@ -15,7 +17,7 @@
 .module-item.active{background:#1e3a8a;border-color:#3b82f6}
 .module-item .module-name{font-size:14px;color:#e6e6e6}
 .module-item .module-count{font-size:12px;color:#9ad}
-#btn-add-module,#btn-overview,#btn-edit-module,#btn-delete-module{background:#059669;color:white;border:none;border-radius:6px;padding:8px;cursor:pointer;font-size:14px;margin:2px 0}
+#btn-add-module,#btn-overview,#btn-edit-module,#btn-delete-module{background:#059669;color:white;border:none;border-radius:6px;padding:10px;cursor:pointer;font-size:15px;margin:2px 0}
 #btn-add-module:hover,#btn-overview:hover,#btn-edit-module:hover{background:#047857}
 #btn-overview{background:#7c3aed}
 #btn-overview:hover{background:#6d28d9}
@@ -64,6 +66,12 @@
 .stats-panel{background:#19212b;border:1px solid #283241;border-radius:10px;padding:10px}
 #stats-display div{margin:4px 0;color:#e6e6e6;font-size:14px}
 #stats-display span{color:#9ad;font-weight:bold}
+
+/* Top usage bar under header */
+#top-usage {
+  display:flex;gap:16px;align-items:center;padding:8px 16px;background:#0c1116;color:#e6e6e6;border-bottom:1px solid #1d2733
+}
+#top-usage .pill { background:#19212b;border:1px solid #283241;border-radius:999px;padding:6px 10px;color:#9ad }
 main{flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden}
 header,footer{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#0f1620;color:#c9d1d9;border-bottom:1px solid #1d2733}
 footer{border-top:1px solid #1d2733;border-bottom:none}
