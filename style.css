@@ -70,7 +70,7 @@ footer{border-top:1px solid #1d2733;border-bottom:none}
 .canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;background:#0a0f14;overflow:auto}
 canvas{background:#0b121a;border:1px solid #1d2733;border-radius:12px}
 .right button{margin-left:8px}
-#ai-suggestions{margin:0;padding-left:18px;max-height:160px;overflow:auto}
+#ai-suggestions{margin:0;padding-left:18px;overflow:auto}
 .suggestion-error{color:#ff6b6b;border-left:3px solid #ff6b6b;padding-left:8px;margin:4px 0}
 .suggestion-warn{color:#ffd93d;border-left:3px solid #ffd93d;padding-left:8px;margin:4px 0}
 .suggestion-hint{color:#6bcf7f;border-left:3px solid #6bcf7f;padding-left:8px;margin:4px 0}

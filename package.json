@@ -19,6 +19,8 @@
   "author": "NASA Hackathon Team",
   "license": "MIT",
   "dependencies": {
+    "body-parser": "^2.2.0",
+    "concurrently": "^9.2.1",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "node-fetch": "^2.7.0"

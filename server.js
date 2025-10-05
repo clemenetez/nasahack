@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5000;
 
 // Ollama settings
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2:1b";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2:3b";
 
 app.use(cors());
 app.use(bodyParser.json({ limit: "2mb" }));
