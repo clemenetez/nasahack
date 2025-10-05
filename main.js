@@ -1,41 +1,164 @@
-/* Minimal 2D habitat planner — Canvas-based */
-const GRID = 20;
-const HABITAT = { x: 50, y: 50, w: 1000, h: 600, corridor: { x: 300, y: 120, w: 500, h: 80 } };
 
-// Module templates with different shapes and sizes
+/* Habitat Layout Creator — cleaned & consolidated main.js
+ * - Deduplicated handlers
+ * - Stable zoom/pan with world-space hit-testing
+ * - Module move/resize with zoom-aware handles
+ * - Object select/move + resize + rotate (90°) + duplicate/delete
+ * - Cable tool: draft/add points, move points, move whole cable
+ * - Overview mode
+ * - Import/Export/Reset + Undo/Redo
+ *
+ * Tip: Keep index.html IDs in sync with the handlers below.
+ */
+
+// --------------------------- Constants ---------------------------
+const GRID = 20;
+const MIN_MODULE_W = 200, MIN_MODULE_H = 150;
+const MIN_OBJECT_W = 20, MIN_OBJECT_H = 20;
+const HANDLE_WORLD = 8; // handle half-size in world units
+const MAX_ZOOM = 3, MIN_ZOOM = 0.3;
+
+// --------------------------- Catalog & Templates ---------------------------
 const MODULE_TEMPLATES = {
   standard: { name: "Standard", w: 1000, h: 600, corridor: { w: 500, h: 80 } },
-  compact: { name: "Compact", w: 800, h: 500, corridor: { w: 400, h: 60 } },
-  large: { name: "Large", w: 1200, h: 700, corridor: { w: 600, h: 100 } },
-  wide: { name: "Wide", w: 1400, h: 500, corridor: { w: 700, h: 80 } },
-  tall: { name: "Tall", w: 800, h: 900, corridor: { w: 400, h: 120 } }
-};
-// Simple catalog with sizes (w,h) in px, and access zones (ax, ay, aw, ah) relative to object (optional)
-const CATALOG = {
-  // Original objects
-  bed:    { w: 160, h: 80,  name: "Bed",    color: "#7aa2f7", access: { x: -10, y: 0, w: 40, h: 80 } },
-  panel:  { w: 140, h: 40,  name: "Panel",  color: "#9ece6a", access: { x: 0, y: 40, w: 140, h: 50 } },
-  cabinet:{ w: 100, h: 100, name: "Cabinet",color: "#f7768e", access: { x: 0, y: 100, w: 100, h: 50 } },
-  cable:  { name: "Cable",  color: "#e0af68" }, // polyline
-  
-  // Food systems
-  kitchen: { w: 200, h: 120, name: "Kitchen", color: "#ff9f43", access: { x: 0, y: 120, w: 200, h: 60 } },
-  dining:  { w: 180, h: 100, name: "Dining",  color: "#ff6b6b", access: { x: 0, y: 100, w: 180, h: 80 } },
-  storage: { w: 120, h: 80,  name: "Storage", color: "#a55eea", access: { x: 0, y: 80, w: 120, h: 40 } },
-  
-  // Life support systems
-  atmosphere: { w: 160, h: 100, name: "Atmosphere Control", color: "#26de81", access: { x: 0, y: 100, w: 160, h: 60 } },
-  monitor:    { w: 140, h: 60,  name: "Monitor", color: "#45aaf2", access: { x: 0, y: 60, w: 140, h: 40 } },
-  
-  // Exercise and recreation
-  exercise: { w: 220, h: 140, name: "Exercise", color: "#fd79a8", access: { x: 0, y: 140, w: 220, h: 80 } },
-  recreation: { w: 180, h: 120, name: "Recreation", color: "#fdcb6e", access: { x: 0, y: 120, w: 180, h: 60 } },
-  
-  // Privacy and psychology
-  private: { w: 100, h: 80, name: "Private Space", color: "#6c5ce7", access: { x: 0, y: 80, w: 100, h: 40 } },
-  communication: { w: 120, h: 60, name: "Comm Station", color: "#00b894", access: { x: 0, y: 60, w: 120, h: 40 } }
+  compact:  { name: "Compact",  w: 800,  h: 500, corridor: { w: 400, h: 60 } },
+  large:    { name: "Large",    w: 1200, h: 700, corridor: { w: 600, h: 100 } },
+  wide:     { name: "Wide",     w: 1400, h: 500, corridor: { w: 700, h: 80 } },
+  tall:     { name: "Tall",     w: 800,  h: 900, corridor: { w: 400, h: 120 } }
 };
 
+const CATALOG = {
+  // Basic
+  bed:      { w: 160, h: 80,  name: "Bed",      color: "#7aa2f7" },
+  panel:    { w: 140, h: 40,  name: "Panel",    color: "#9ece6a" },
+  cabinet:  { w: 100, h: 100, name: "Cabinet",  color: "#f7768e" },
+  cable:    {               name: "Cable",     color: "#e0af68" }, // polyline
+
+  // Food
+  kitchen:  { w: 200, h: 120, name: "Kitchen",  color: "#ff9f43" },
+  dining:   { w: 180, h: 100, name: "Dining",   color: "#ff6b6b" },
+  storage:  { w: 120, h: 80,  name: "Storage",  color: "#a55eea" },
+
+  // Life support
+  atmosphere: { w: 160, h: 100, name: "Atmosphere Control", color: "#26de81" },
+  monitor:    { w: 140, h: 60,  name: "Monitor",             color: "#45aaf2" },
+
+  // Exercise & Recreation
+  exercise:  { w: 220, h: 140, name: "Exercise",   color: "#fd79a8" },
+  recreation:{ w: 180, h: 120, name: "Recreation", color: "#fdcb6e" },
+
+  // Psychology
+  private:      { w: 100, h: 80, name: "Private Space", color: "#6c5ce7" },
+  communication:{ w: 120, h: 60, name: "Comm Station",  color: "#00b894" }
+};
+// === IMAGE PRELOAD (icons for objects) ===
+const itemImages = {}; // cache: type -> HTMLImageElement
+
+// Відповідність типів з CATALOG → PNG-файлів у /images
+const imageMap = {
+  // Basic
+  bed: "bed.png",
+  panel: "panel.png",
+  cabinet: "cabinet.png",
+  cable: null, // для cable малюємо лінії — іконка не потрібна
+
+  // Food
+  kitchen: "kitchen.png",
+  dining: "dining.png",
+  storage: "storage.png",
+
+  // Life support
+  atmosphere: "atmosphere.png",
+  monitor: "monitor.png",
+
+  // Exercise & Recreation
+  exercise: "exercise.png",
+  recreation: "recreation.png",
+
+  // Psychology
+  private: "private.png",
+  communication: "communication.png"
+};
+
+// Препроад усіх іконок, ререндер після загрузки
+Object.keys(imageMap).forEach(type => {
+  const file = imageMap[type];
+  if (!file) return;              // пропускаємо типи без картинки
+  const img = new Image();
+  img.src = `images/${file}`;     // поклади PNG у /images поряд із index.html
+  img.addEventListener("load",  () => { try { render(); } catch (_) {} });
+  img.addEventListener("error", () => console.warn(`⚠️ Image not found: ${file}`));
+  itemImages[type] = img;
+});
+
+
+// --------------------------- Helpers ---------------------------
+const $  = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const snap  = (v, g = GRID) => Math.round(v / g) * g;
+const genId = () => Math.random().toString(36).slice(2, 9);
+
+function roundRect(x, y, w, h, r, fill = true, stroke = false) {
+  const rr = Math.min(r, w * .5, h * .5);
+  ctx.beginPath();
+  ctx.moveTo(x+rr, y);
+  ctx.arcTo(x+w, y, x+w, y+h, rr);
+  ctx.arcTo(x+w, y+h, x, y+h, rr);
+  ctx.arcTo(x, y+h, x, y, rr);
+  ctx.arcTo(x, y, x+w, y, rr);
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+function distanceToLineSegment(px, py, x1, y1, x2, y2) {
+  const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
+  const dot = A*C + B*D;
+  const lenSq = C*C + D*D || 1;
+  let t = dot / lenSq;
+  t = clamp(t, 0, 1);
+  const lx = x1 + t*C, ly = y1 + t*D;
+  const dx = px - lx, dy = py - ly;
+  return Math.hypot(dx, dy);
+}
+
+// --------------------------- Canvas & View ---------------------------
+const canvas = $("#canvas");
+const ctx = canvas.getContext("2d");
+
+const view = {
+  zoom: 1,
+  offsetX: 0,
+  offsetY: 0,
+  isPanning: false,
+  panStartX: 0,
+  panStartY: 0
+};
+
+function resizeCanvasToContainer() {
+  const wrap = document.querySelector(".canvas-wrap");
+  if (!wrap) return;
+  // Make canvas fill the working area (minus some padding)
+  const w = wrap.clientWidth - 24;
+  const h = wrap.clientHeight - 24;
+  canvas.width = Math.max(600, w);
+  canvas.height = Math.max(400, h);
+}
+window.addEventListener("resize", () => { resizeCanvasToContainer(); render(); });
+resizeCanvasToContainer();
+
+function getMouse(e) {
+  const rect = canvas.getBoundingClientRect();
+  const sx = e.clientX - rect.left;
+  const sy = e.clientY - rect.top;
+  // invert current transform
+  const x = (sx - view.offsetX) / view.zoom;
+  const y = (sy - view.offsetY) / view.zoom;
+  return { x, y };
+}
+
+// --------------------------- State ---------------------------
 let state = {
   modules: [
     {
@@ -48,1233 +171,112 @@ let state = {
       type: "habitat"
     }
   ],
+  connections: [],
   activeModuleId: "module-1",
   selectedId: null,
   selectedModuleId: null,
   editingModuleId: null,
-  tool: "select", // "select" | "cable" | "module"
-  cableDraft: null, // {points: [{x,y},...]} while drawing
-  aiSource: "local",
-  viewMode: "single", // "single" | "overview"
-  overviewScale: 0.5,
-  connections: [], // Array of connections between modules
-  history: [], // Undo history
-  historyIndex: -1, // Current position in history
-  maxHistorySize: 50 // Maximum number of undo states
+  tool: "select",    // "select" | "cable" | "module"
+  cableDraft: null,  // {id, type:'cable', points:[{x,y},...] } in module-relative coords
+  viewMode: "single",
+  overviewScale: 0.3,
+
+  // history
+  history: [],
+  future: []
 };
 
-// Helper functions for module management
-function getActiveModule() {
-  return state.modules.find(m => m.id === state.activeModuleId);
+// --------------------------- Persistence ---------------------------
+function saveState() {
+  localStorage.setItem("habitat-state", JSON.stringify(state));
+}
+function loadState() {
+  try {
+    const raw = localStorage.getItem("habitat-state");
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (s && s.modules) state = Object.assign(state, s);
+  } catch (e) { /* ignore */ }
+}
+loadState();
+
+function saveToHistory() {
+  state.history.push(JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId }));
+  if (state.history.length > 100) state.history.shift();
+  state.future = [];
+  saveState();
+}
+function undo() {
+  if (!state.history.length) return;
+  state.future.push(JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId }));
+  const prev = JSON.parse(state.history.pop());
+  state.modules = prev.modules;
+  state.activeModuleId = prev.activeModuleId;
+  state.selectedId = null;
+  state.cableDraft = null;
+  saveState();
+  renderModuleList();
+  render();
+}
+function redo() {
+  if (!state.future.length) return;
+  state.history.push(JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId }));
+  const next = JSON.parse(state.future.pop());
+  state.modules = next.modules;
+  state.activeModuleId = next.activeModuleId;
+  state.selectedId = null;
+  state.cableDraft = null;
+  saveState();
+  renderModuleList();
+  render();
 }
 
+// --------------------------- Module helpers ---------------------------
+function getActiveModule() {
+  return state.modules.find(m => m.id === state.activeModuleId) || null;
+}
 function getActiveObjects() {
   return getActiveModule()?.objects || [];
 }
-
-// Undo/Redo functionality
-function saveToHistory() {
-  // Remove any history after current index (when new action is performed after undo)
-  if (state.historyIndex < state.history.length - 1) {
-    state.history = state.history.slice(0, state.historyIndex + 1);
-  }
-  
-  // Create deep copy of current state
-  const historyState = {
-    modules: JSON.parse(JSON.stringify(state.modules)),
-    activeModuleId: state.activeModuleId,
-    connections: JSON.parse(JSON.stringify(state.connections)),
-    timestamp: Date.now()
-  };
-  
-  // Add to history
-  state.history.push(historyState);
-  state.historyIndex = state.history.length - 1;
-  
-  // Limit history size
-  if (state.history.length > state.maxHistorySize) {
-    state.history.shift();
-    state.historyIndex--;
-  }
-}
-
-function undo() {
-  if (state.historyIndex > 0) {
-    state.historyIndex--;
-    const historyState = state.history[state.historyIndex];
-    
-    // Restore state
-    state.modules = JSON.parse(JSON.stringify(historyState.modules));
-    state.activeModuleId = historyState.activeModuleId;
-    state.connections = JSON.parse(JSON.stringify(historyState.connections));
-    
-    // Clear selections
-    state.selectedId = null;
-    state.selectedModuleId = null;
-    state.cableDraft = null;
-    
-    // Update UI
-    renderModuleList();
-    render();
-    saveState();
-  }
-}
-
-function redo() {
-  if (state.historyIndex < state.historyIndex.length - 1) {
-    state.historyIndex++;
-    const historyState = state.history[state.historyIndex];
-    
-    // Restore state
-    state.modules = JSON.parse(JSON.stringify(historyState.modules));
-    state.activeModuleId = historyState.activeModuleId;
-    state.connections = JSON.parse(JSON.stringify(historyState.connections));
-    
-    // Clear selections
-    state.selectedId = null;
-    state.selectedModuleId = null;
-    state.cableDraft = null;
-    
-    // Update UI
-    renderModuleList();
-    render();
-    saveState();
-  }
-}
-
-// Auto-save to localStorage
-function saveState() {
-  localStorage.setItem('habitat-layout', JSON.stringify({
-    modules: state.modules,
-    activeModuleId: state.activeModuleId,
-    aiSource: state.aiSource,
-    connections: state.connections,
-    viewMode: state.viewMode,
-    history: state.history,
-    historyIndex: state.historyIndex
-  }));
-}
-
-function loadState() {
-  try {
-    const saved = localStorage.getItem('habitat-layout');
-    if (saved) {
-      const data = JSON.parse(saved);
-      if (data.modules) {
-        state.modules = data.modules;
-        state.activeModuleId = data.activeModuleId || "module-1";
-      } else if (data.objects) {
-        // Legacy support for old saves
-        state.modules[0].objects = data.objects;
-      }
-      state.aiSource = data.aiSource || "local";
-      state.connections = data.connections || [];
-      state.viewMode = data.viewMode || "single";
-      state.history = data.history || [];
-      state.historyIndex = data.historyIndex !== undefined ? data.historyIndex : -1;
-      $("#ai-source").value = state.aiSource;
-    }
-  } catch (e) {
-    console.warn('Failed to load saved state:', e);
-  }
-}
-
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const $ = sel => document.querySelector(sel);
-const $$ = sel => document.querySelectorAll(sel);
-
-function snap(v) { return Math.round(v / GRID) * GRID; }
-function genId() { return Math.random().toString(36).slice(2, 9); }
-
-function addObject(type, x, y) {
-  if (type === "cable") {
-    state.cableDraft = { id: genId(), type: "cable", points: [] };
-    state.tool = "cable";
-    markToolActive();
-    return;
-  }
-  const t = CATALOG[type];
-  const activeModule = getActiveModule();
-  if (activeModule) {
-    saveToHistory(); // Save state before adding object
-    // Convert global coordinates to module-relative coordinates
-    const moduleX = x - activeModule.x;
-    const moduleY = y - activeModule.y;
-    const obj = { id: genId(), type, x: snap(moduleX), y: snap(moduleY), w: t.w, h: t.h, rot: 0 };
-    activeModule.objects.push(obj);
-    state.selectedId = obj.id;
-    saveState();
-    render();
-  }
-}
-
-function objectsAtPoint(x, y) {
-  const hits = [];
-  const objects = getActiveObjects();
-  const activeModule = getActiveModule();
-  
-  // Check regular objects
-  for (const o of objects) {
-    if (o.type !== "cable") {
-      // Adjust coordinates relative to module position
-      const objRect = {
-        x: activeModule.x + o.x,
-        y: activeModule.y + o.y,
-        w: o.w,
-        h: o.h
-      };
-      if (pointInRect(x, y, objRect)) {
-        hits.push(o.id);
-      }
-    }
-  }
-  
-  // Check cables (improved selection logic)
-  for (const o of objects) {
-    if (o.type === "cable" && o.points && o.points.length >= 2) {
-      // Check if point is near any cable segment
-      for (let i = 0; i < o.points.length - 1; i++) {
-        const p1 = o.points[i];
-        const p2 = o.points[i + 1];
-        const dist = distanceToLineSegment(x, y, p1.x, p1.y, p2.x, p2.y);
-        if (dist < 8) { // Reduced tolerance for better precision
-          hits.push(o.id);
-          break;
-        }
-      }
-    }
-  }
-  
-  return hits;
-}
-
-function getCablePointAtPoint(x, y, cableId) {
-  const objects = getActiveObjects();
-  const activeModule = getActiveModule();
-  const cable = objects.find(o => o.id === cableId && o.type === "cable");
-  
-  if (!cable || !cable.points) return null;
-  
-  // Check if clicking on a control point
-  for (let i = 0; i < cable.points.length; i++) {
-    const pt = cable.points[i];
-    const ptX = activeModule.x + pt.x;
-    const ptY = activeModule.y + pt.y;
-    const dist = Math.sqrt((x - ptX) ** 2 + (y - ptY) ** 2);
-    
-    if (dist < 10) { // Click tolerance for control points
-      return { pointIndex: i, point: pt };
-    }
-  }
-  
-  return null;
-}
-
 function modulesAtPoint(x, y) {
-  const hits = [];
-  for (const module of state.modules) {
-    if (pointInRect(x, y, module)) {
-      hits.push(module.id);
+  const arr = [];
+  for (const m of state.modules) {
+    if (x >= m.x && x <= m.x + m.w && y >= m.y && y <= m.y + m.h) {
+      arr.push(m.id);
     }
   }
-  return hits;
+  return arr;
 }
 
-function getResizeHandleAtPoint(x, y, module) {
-  const handleSize = 8;
-  const handles = [
-    // Corner handles
-    { x: module.x - handleSize/2, y: module.y - handleSize/2, type: "nw" },
-    { x: module.x + module.w - handleSize/2, y: module.y - handleSize/2, type: "ne" },
-    { x: module.x - handleSize/2, y: module.y + module.h - handleSize/2, type: "sw" },
-    { x: module.x + module.w - handleSize/2, y: module.y + module.h - handleSize/2, type: "se" },
-    // Edge handles
-    { x: module.x + module.w/2 - handleSize/2, y: module.y - handleSize/2, type: "n" },
-    { x: module.x + module.w/2 - handleSize/2, y: module.y + module.h - handleSize/2, type: "s" },
-    { x: module.x - handleSize/2, y: module.y + module.h/2 - handleSize/2, type: "w" },
-    { x: module.x + module.w - handleSize/2, y: module.y + module.h/2 - handleSize/2, type: "e" }
-  ];
-  
-  for (const handle of handles) {
-    if (x >= handle.x && x <= handle.x + handleSize && 
-        y >= handle.y && y <= handle.y + handleSize) {
-      return handle.type;
-    }
-  }
-  return null;
-}
-
-function pointInRect(px, py, r) {
-  return px >= r.x && py >= r.y && px <= r.x + r.w && py <= r.y + r.h;
-}
-
-function distanceToLineSegment(px, py, x1, y1, x2, y2) {
-  const A = px - x1;
-  const B = py - y1;
-  const C = x2 - x1;
-  const D = y2 - y1;
-
-  const dot = A * C + B * D;
-  const lenSq = C * C + D * D;
-  let param = -1;
-  if (lenSq !== 0) {
-    param = dot / lenSq;
-  }
-
-  let xx, yy;
-
-  if (param < 0) {
-    xx = x1;
-    yy = y1;
-  } else if (param > 1) {
-    xx = x2;
-    yy = y2;
-  } else {
-    xx = x1 + param * C;
-    yy = y1 + param * D;
-  }
-
-  const dx = px - xx;
-  const dy = py - yy;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-function rectsOverlap(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
-function drawGrid() {
-  const activeModule = getActiveModule();
-  if (!activeModule) return;
-  
-  ctx.strokeStyle = "#12202d";
-  ctx.lineWidth = 1;
-  for (let x = activeModule.x; x <= activeModule.x + activeModule.w; x += GRID) {
-    ctx.beginPath(); ctx.moveTo(x, activeModule.y); ctx.lineTo(x, activeModule.y + activeModule.h); ctx.stroke();
-  }
-  for (let y = activeModule.y; y <= activeModule.y + activeModule.h; y += GRID) {
-    ctx.beginPath(); ctx.moveTo(activeModule.x, y); ctx.lineTo(activeModule.x + activeModule.w, y); ctx.stroke();
-  }
-}
-
-function drawHabitat() {
-  const activeModule = getActiveModule();
-  if (!activeModule) return;
-  
-  // habitat border with custom color
-  ctx.fillStyle = activeModule.color || "#0d1b26";
-  ctx.strokeStyle = "#284157";
-  ctx.lineWidth = 2;
-  roundRect(activeModule.x, activeModule.y, activeModule.w, activeModule.h, 16, true, true);
-
-  // Highlight selected module if in module tool
-  if (state.tool === "module" && state.selectedModuleId === activeModule.id) {
-    ctx.strokeStyle = "#ffd166";
-    ctx.lineWidth = 3;
-    roundRect(activeModule.x - 2, activeModule.y - 2, activeModule.w + 4, activeModule.h + 4, 18, false, true);
-    
-    // Draw resize handles
-    drawResizeHandles(activeModule);
-  }
-
-  // corridor removed - no visual representation needed
-  
-  // Module name with type icon
-  ctx.fillStyle = "#9ad";
-  ctx.font = "bold 14px system-ui";
-  const typeIcon = getModuleTypeIcon(activeModule.type);
-  ctx.fillText(typeIcon + " " + activeModule.name, activeModule.x + 10, activeModule.y - 10);
-}
-
-function getModuleTypeIcon(type) {
-  const icons = {
-    habitat: "🏠",
-    laboratory: "🔬",
-    storage: "📦",
-    greenhouse: "🌱",
-    gym: "💪",
-    medical: "🏥"
-  };
-  return icons[type] || "🏠";
-}
-
-function drawResizeHandles(module) {
-  const handleSize = 8;
-  const handles = [
-    // Corner handles
-    { x: module.x - handleSize/2, y: module.y - handleSize/2, type: "nw" },
-    { x: module.x + module.w - handleSize/2, y: module.y - handleSize/2, type: "ne" },
-    { x: module.x - handleSize/2, y: module.y + module.h - handleSize/2, type: "sw" },
-    { x: module.x + module.w - handleSize/2, y: module.y + module.h - handleSize/2, type: "se" },
-    // Edge handles
-    { x: module.x + module.w/2 - handleSize/2, y: module.y - handleSize/2, type: "n" },
-    { x: module.x + module.w/2 - handleSize/2, y: module.y + module.h - handleSize/2, type: "s" },
-    { x: module.x - handleSize/2, y: module.y + module.h/2 - handleSize/2, type: "w" },
-    { x: module.x + module.w - handleSize/2, y: module.y + module.h/2 - handleSize/2, type: "e" }
-  ];
-  
-  ctx.fillStyle = "#ffd166";
-  ctx.strokeStyle = "#000";
-  ctx.lineWidth = 1;
-  
-  for (const handle of handles) {
-    ctx.fillRect(handle.x, handle.y, handleSize, handleSize);
-    ctx.strokeRect(handle.x, handle.y, handleSize, handleSize);
-  }
-}
-
-function updateCursor(x, y) {
-  if (state.tool === "module" && state.selectedModuleId) {
-    const module = state.modules.find(m => m.id === state.selectedModuleId);
-    if (module) {
-      const resizeHandle = getResizeHandleAtPoint(x, y, module);
-      if (resizeHandle) {
-        const cursors = {
-          "nw": "nw-resize",
-          "ne": "ne-resize", 
-          "sw": "sw-resize",
-          "se": "se-resize",
-          "n": "n-resize",
-          "s": "s-resize",
-          "w": "w-resize",
-          "e": "e-resize"
-        };
-        canvas.style.cursor = cursors[resizeHandle] || "default";
-        return;
-      }
-    }
-  }
-  canvas.style.cursor = "default";
-}
-
-function drawObjects() {
-  const objects = getActiveObjects();
-  const activeModule = getActiveModule();
-  
-  for (const o of objects) {
-    if (o.type === "cable") {
-      drawCable(o);
-      continue;
-    }
-    const cat = CATALOG[o.type];
-    ctx.fillStyle = cat.color;
-    ctx.strokeStyle = "#0b0b0b";
-    ctx.lineWidth = 1.5;
-    
-    // Draw object relative to module position
-    const objX = activeModule.x + o.x;
-    const objY = activeModule.y + o.y;
-    ctx.fillRect(objX, objY, o.w, o.h);
-    ctx.strokeRect(objX, objY, o.w, o.h);
-
-    // label
-    ctx.fillStyle = "#e6e6e6";
-    ctx.font = "12px system-ui";
-    ctx.fillText(cat.name, objX + 6, objY + 16);
-
-    // access zones removed - no visual representation needed
-
-    // selection
-    if (state.selectedId === o.id) {
-      ctx.strokeStyle = "#ffd166";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(objX - 2, objY - 2, o.w + 4, o.h + 4);
-    }
-  }
-
-  // cable draft
-  if (state.cableDraft) {
-    ctx.strokeStyle = CATALOG.cable.color;
-    ctx.lineWidth = 3;
-    ctx.setLineDash([4,4]);
-    const pts = state.cableDraft.points;
-    if (pts.length > 0) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-  }
-}
-
-function drawCable(c) {
-  const activeModule = getActiveModule();
-  ctx.strokeStyle = CATALOG.cable.color;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  const pts = c.points;
-  if (!pts || pts.length < 2) return;
-  
-  // Draw cable relative to module position
-  ctx.moveTo(activeModule.x + pts[0].x, activeModule.y + pts[0].y);
-  for (let i=1;i<pts.length;i++) {
-    ctx.lineTo(activeModule.x + pts[i].x, activeModule.y + pts[i].y);
-  }
-  ctx.stroke();
-  
-  // Draw control points if selected
-  if (state.selectedId === c.id) {
-    ctx.fillStyle = "#ffd166";
-    ctx.strokeStyle = "#ffd166";
-    ctx.lineWidth = 2;
-    for (let i = 0; i < pts.length; i++) {
-      const pt = pts[i];
-      ctx.beginPath();
-      ctx.arc(activeModule.x + pt.x, activeModule.y + pt.y, 6, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-      
-      // Draw point index for easier identification
-      ctx.fillStyle = "#000";
-      ctx.font = "10px system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText(i.toString(), activeModule.x + pt.x, activeModule.y + pt.y + 3);
-      ctx.fillStyle = "#ffd166";
-    }
-    
-    // Draw selection outline
-    ctx.strokeStyle = "#ffd166";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(activeModule.x + pts[0].x, activeModule.y + pts[0].y);
-    for (let i=1;i<pts.length;i++) {
-      ctx.lineTo(activeModule.x + pts[i].x, activeModule.y + pts[i].y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-}
-
-function roundRect(x, y, w, h, r, fill, stroke) {
-  if (r === undefined) r = 5;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  if (fill) ctx.fill();
-  if (stroke) ctx.stroke();
-}
-
-/* ---------------- Rules (NASA-inspired, simplified) ---------------- */
-function validateLayout() {
-  const issues = [];
-  const activeModule = getActiveModule();
-  if (!activeModule) return issues;
-  
-  const objects = getActiveObjects();
-  
-  // 1) All objects inside habitat and not overlapping
-  for (let i = 0; i < objects.length; i++) {
-    const a = objects[i];
-    if (a.type === "cable") continue;
-    // inside habitat
-    const r = activeModule;
-    if (a.x < r.x || a.y < r.y || a.x + a.w > r.x + r.w || a.y + a.h > r.y + r.h) {
-      issues.push({type:"error", msg:`${CATALOG[a.type].name} is outside habitat bounds.`});
-    }
-    // overlap
-    for (let j = i + 1; j < objects.length; j++) {
-      const b = objects[j];
-      if (b.type === "cable") continue;
-      if (rectsOverlap(a, b)) {
-        issues.push({type:"error", msg:`${CATALOG[a.type].name} overlaps with ${CATALOG[b.type].name}.`});
-      }
-    }
-    // corridor validation removed - no visual corridor
-    // access zone validation removed - no visual access zones
-  }
-  // 2) Cable along walls (approx: every cable point must lie near a wall)
-  for (const o of objects) {
-    if (o.type !== "cable") continue;
-    const bad = o.points.some(p => {
-      const nearLeft   = Math.abs(p.x - activeModule.x) < GRID;
-      const nearRight  = Math.abs(p.x - (activeModule.x + activeModule.w)) < GRID;
-      const nearTop    = Math.abs(p.y - activeModule.y) < GRID;
-      const nearBottom = Math.abs(p.y - (activeModule.y + activeModule.h)) < GRID;
-      return !(nearLeft || nearRight || nearTop || nearBottom);
-    });
-    if (bad) issues.push({type:"warn", msg:"Cable should be routed along walls/edges for safety."});
-  }
-  // 3) Bed away from Panel (noise/light) → recommend distance >= 120px
-  const beds = objects.filter(o=>o.type==="bed");
-  const panels = objects.filter(o=>o.type==="panel");
-  for (const b of beds) {
-    for (const p of panels) {
-      const dx = (b.x + b.w/2) - (p.x + p.w/2);
-      const dy = (b.y + b.h/2) - (p.y + p.h/2);
-      const dist = Math.hypot(dx, dy);
-      if (dist < 120) issues.push({type:"hint", msg:"Consider placing Bed further from Panel to reduce noise/light exposure."});
-    }
-  }
-  
-  // 4) Check minimum free space (at least 30% of habitat should be clear)
-  const totalArea = activeModule.w * activeModule.h;
-  const objectArea = objects
-    .filter(o => o.type !== "cable")
-    .reduce((sum, o) => sum + (o.w * o.h), 0);
-  const freeSpaceRatio = (totalArea - objectArea) / totalArea;
-  if (freeSpaceRatio < 0.3) {
-    issues.push({type:"warn", msg:`Only ${Math.round(freeSpaceRatio * 100)}% free space. NASA recommends at least 30% for crew movement.`});
-  }
-  
-  // 5) Check for objects too close to habitat walls (minimum 20px clearance)
-  for (const o of objects) {
-    if (o.type === "cable") continue;
-    const clearance = 20;
-    if (o.x < activeModule.x + clearance || 
-        o.y < activeModule.y + clearance ||
-        o.x + o.w > activeModule.x + activeModule.w - clearance ||
-        o.y + o.h > activeModule.y + activeModule.h - clearance) {
-      issues.push({type:"warn", msg:`${CATALOG[o.type].name} is too close to habitat wall. Maintain ${clearance}px clearance.`});
-    }
-  }
-  
-  // 6) New NASA rules for extended systems
-  // Kitchen should be near dining area
-  const kitchens = objects.filter(o=>o.type==="kitchen");
-  const dinings = objects.filter(o=>o.type==="dining");
-  if (kitchens.length > 0 && dinings.length > 0) {
-    for (const k of kitchens) {
-      const minDist = Math.min(...dinings.map(d => {
-        const dx = (k.x + k.w/2) - (d.x + d.w/2);
-        const dy = (k.y + k.h/2) - (d.y + d.h/2);
-        return Math.hypot(dx, dy);
-      }));
-      if (minDist > 200) {
-        issues.push({type:"hint", msg:"Consider placing Kitchen closer to Dining area for efficiency."});
-      }
-    }
-  }
-  
-  // Exercise area should be away from sleeping areas
-  const exercises = objects.filter(o=>o.type==="exercise");
-  for (const e of exercises) {
-    for (const b of beds) {
-      const dx = (e.x + e.w/2) - (b.x + b.w/2);
-      const dy = (e.y + e.h/2) - (b.y + b.h/2);
-      const dist = Math.hypot(dx, dy);
-      if (dist < 150) {
-        issues.push({type:"hint", msg:"Consider placing Exercise area further from sleeping areas to reduce noise."});
-      }
-    }
-  }
-  
-  return issues;
-}
-
-/* ---------------- AI Hook ---------------- */
-async function analyzeAI() {
-  const src = state.aiSource;
-  const activeModule = getActiveModule();
-  const layout = { 
-    modules: state.modules,
-    activeModule: activeModule,
-    objects: getActiveObjects()
-  };
-  let suggestions = [];
-  if (src === "local") {
-    // Combine rule engine + extra heuristics
-    suggestions = validateLayout();
-    const objects = getActiveObjects();
-    if (objects.length === 0) {
-      suggestions.push({type:"hint", msg:"Add at least a Bed and a Panel to start a functional layout."});
-    }
-    if (objects.filter(o=>o.type==="cabinet").length < 1) {
-      suggestions.push({type:"hint", msg:"Consider adding a Cabinet for storage along a wall to free central space."});
-    }
-    if (objects.filter(o=>o.type==="kitchen").length < 1) {
-      suggestions.push({type:"hint", msg:"Consider adding a Kitchen for food preparation and crew nutrition."});
-    }
-    if (objects.filter(o=>o.type==="exercise").length < 1) {
-      suggestions.push({type:"hint", msg:"Consider adding an Exercise area for crew physical health."});
-    }
-    if (objects.filter(o=>o.type==="private").length < 1) {
-      suggestions.push({type:"hint", msg:"Consider adding Private Space for crew psychological well-being."});
-    }
-  } else {
-    try {
-      const res = await fetch("http://localhost:5000/api/ai/suggest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layout })
-      });
-      suggestions = await res.json();
-    } catch (e) {
-      suggestions = [{type:"error", msg:"AI proxy not reachable. Switch source to Local or start server.js"}];
-    }
-  }
-  renderAISuggestions(suggestions);
-}
-
-function renderAISuggestions(items) {
-  const ul = document.getElementById("ai-suggestions");
-  ul.innerHTML = "";
-  for (const it of items) {
-    const li = document.createElement("li");
-    li.textContent = it.msg;
-    li.className = `suggestion-${it.type}`;
-    ul.appendChild(li);
-  }
-}
-
-/* ---------------- Input & interactions ---------------- */
-let drag = null;
-
-canvas.addEventListener("mousedown", e => {
-  const pos = getMouse(e);
-  
-  if (state.viewMode === "overview") {
-    // In overview mode, check if clicking on a module
-    for (const module of state.modules) {
-      const scale = state.overviewScale;
-      const x = module.x * scale;
-      const y = module.y * scale;
-      const w = module.w * scale;
-      const h = module.h * scale;
-      
-      if (pos.x >= x && pos.x <= x + w && pos.y >= y && pos.y <= y + h) {
-        switchModule(module.id);
-        state.viewMode = "single";
-        render();
-        return;
-      }
-    }
-    return;
-  }
-  
-  if (state.tool === "cable") {
-    if (!state.cableDraft) state.cableDraft = { id: genId(), type: "cable", points: [] };
-    state.cableDraft.points.push({ x: snap(pos.x), y: snap(pos.y) });
-    render();
-    return;
-  }
-  
-  if (state.tool === "module") {
-    // Module tool - select modules or resize handles
-    const moduleHits = modulesAtPoint(pos.x, pos.y);
-    if (moduleHits.length) {
-      state.selectedModuleId = moduleHits[moduleHits.length-1];
-      const module = state.modules.find(m => m.id === state.selectedModuleId);
-      
-      // Check if clicking on resize handle
-      const resizeHandle = getResizeHandleAtPoint(pos.x, pos.y, module);
-      if (resizeHandle) {
-        drag = { 
-          id: module.id, 
-          dx: pos.x - module.x, 
-          dy: pos.y - module.y,
-          type: "resize",
-          handle: resizeHandle,
-          startX: module.x,
-          startY: module.y,
-          startW: module.w,
-          startH: module.h
-        };
-      } else {
-        drag = { 
-          id: module.id, 
-          dx: pos.x - module.x, 
-          dy: pos.y - module.y,
-          type: "module"
-        };
-      }
-    } else {
-      state.selectedModuleId = null;
-    }
-    render();
-    return;
-  }
-  
-  const hits = objectsAtPoint(pos.x, pos.y);
-  if (hits.length) {
-    state.selectedId = hits[hits.length-1];
-    const objects = getActiveObjects();
-    const activeModule = getActiveModule();
-    const obj = objects.find(o=>o.id===state.selectedId);
-    
-    
-    // Check if clicking on a cable control point
-    if (obj && obj.type === "cable") {
-      const cablePoint = getCablePointAtPoint(pos.x, pos.y, obj.id);
-      if (cablePoint) {
-        // Start dragging cable point
-        drag = {
-          id: obj.id,
-          pointIndex: cablePoint.pointIndex,
-          dx: pos.x - (activeModule.x + cablePoint.point.x),
-          dy: pos.y - (activeModule.y + cablePoint.point.y),
-          type: "cablePoint"
-        };
-      } else {
-        // Start dragging entire cable
-        drag = {
-          id: obj.id,
-          dx: 0,
-          dy: 0,
-          type: "cable"
-        };
-      }
-    } else {
-      // Calculate drag offset in global coordinates for regular objects
-      drag = { 
-        id: obj.id, 
-        dx: pos.x - (activeModule.x + obj.x), 
-        dy: pos.y - (activeModule.y + obj.y),
-        type: "object"
-      };
-    }
-  } else {
-    state.selectedId = null;
-  }
-  render();
-});
-
-canvas.addEventListener("mousemove", e => {
-  const pos = getMouse(e);
-  
-  // Update cursor for resize handles
-  if (!drag) {
-    updateCursor(pos.x, pos.y);
-  }
-  
-  if (!drag || state.viewMode === "overview") return;
-  
-  if (drag.type === "module") {
-    // Move module
-    const module = state.modules.find(m => m.id === drag.id);
-    if (module) {
-      module.x = snap(pos.x - drag.dx);
-      module.y = snap(pos.y - drag.dy);
-      // Update corridor position
-      module.corridor.x = module.x + (module.w - module.corridor.w) / 2;
-      module.corridor.y = module.y + (module.h - module.corridor.h) / 2;
-      render();
-    }
-  } else if (drag.type === "resize") {
-    // Resize module
-    const module = state.modules.find(m => m.id === drag.id);
-    if (module) {
-      const deltaX = pos.x - drag.startX;
-      const deltaY = pos.y - drag.startY;
-      
-      let newX = drag.startX;
-      let newY = drag.startY;
-      let newW = drag.startW;
-      let newH = drag.startH;
-      
-      switch (drag.handle) {
-        case "nw":
-          newX = drag.startX + deltaX;
-          newY = drag.startY + deltaY;
-          newW = drag.startW - deltaX;
-          newH = drag.startH - deltaY;
-          break;
-        case "ne":
-          newY = drag.startY + deltaY;
-          newW = drag.startW + deltaX;
-          newH = drag.startH - deltaY;
-          break;
-        case "sw":
-          newX = drag.startX + deltaX;
-          newW = drag.startW - deltaX;
-          newH = drag.startH + deltaY;
-          break;
-        case "se":
-          newW = drag.startW + deltaX;
-          newH = drag.startH + deltaY;
-          break;
-        case "n":
-          newY = drag.startY + deltaY;
-          newH = drag.startH - deltaY;
-          break;
-        case "s":
-          newH = drag.startH + deltaY;
-          break;
-        case "w":
-          newX = drag.startX + deltaX;
-          newW = drag.startW - deltaX;
-          break;
-        case "e":
-          newW = drag.startW + deltaX;
-          break;
-      }
-      
-      // Apply minimum size constraints
-      if (newW >= 200 && newH >= 150) {
-        module.x = snap(newX);
-        module.y = snap(newY);
-        module.w = snap(newW);
-        module.h = snap(newH);
-        
-        // Update corridor position
-        module.corridor.x = module.x + (module.w - module.corridor.w) / 2;
-        module.corridor.y = module.y + (module.h - module.corridor.h) / 2;
-        
-        render();
-      }
-    }
-  } else if (drag.type === "object") {
-    // Move object
-    const objects = getActiveObjects();
-    const activeModule = getActiveModule();
-    const obj = objects.find(o=>o.id===drag.id);
-    if (obj) {
-      // Convert global coordinates to module-relative coordinates
-      const moduleX = pos.x - activeModule.x - drag.dx;
-      const moduleY = pos.y - activeModule.y - drag.dy;
-      obj.x = snap(moduleX);
-      obj.y = snap(moduleY);
-      render();
-    }
-  } else if (drag.type === "cablePoint") {
-    // Move cable point
-    const objects = getActiveObjects();
-    const activeModule = getActiveModule();
-    const cable = objects.find(o=>o.id===drag.id && o.type === "cable");
-    if (cable && cable.points && cable.points[drag.pointIndex]) {
-      // Convert global coordinates to module-relative coordinates
-      const moduleX = pos.x - activeModule.x - drag.dx;
-      const moduleY = pos.y - activeModule.y - drag.dy;
-      cable.points[drag.pointIndex].x = snap(moduleX);
-      cable.points[drag.pointIndex].y = snap(moduleY);
-      render();
-    }
-  } else if (drag.type === "cable") {
-    // Move entire cable
-    const objects = getActiveObjects();
-    const activeModule = getActiveModule();
-    const cable = objects.find(o=>o.id===drag.id && o.type === "cable");
-    if (cable && cable.points) {
-      const deltaX = pos.x - (drag.lastX || pos.x);
-      const deltaY = pos.y - (drag.lastY || pos.y);
-      
-      // Move all points by the delta
-      for (const point of cable.points) {
-        point.x = snap(point.x + deltaX);
-        point.y = snap(point.y + deltaY);
-      }
-      
-      drag.lastX = pos.x;
-      drag.lastY = pos.y;
-      render();
-    }
-  }
-});
-
-canvas.addEventListener("mouseup", e => {
-  if (drag && state.viewMode !== "overview") {
-    saveToHistory(); // Save state after drag operation
-    saveState();
-  }
-  drag = null;
-});
-
-canvas.addEventListener("dblclick", e => {
-  if (state.viewMode === "overview") return;
-  
-  if (state.tool === "cable" && state.cableDraft && state.cableDraft.points.length >= 2) {
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      saveToHistory(); // Save state before adding cable
-      activeModule.objects.push(state.cableDraft);
-      state.selectedId = state.cableDraft.id;
-      state.cableDraft = null;
-      state.tool = "select";
-      markToolActive();
-      saveState();
-      render();
-    }
-  }
-});
-
-document.addEventListener("keydown", e => {
-  if (state.viewMode === "overview") {
-    if (e.key.toLowerCase() === "o") {
-      toggleOverviewMode();
-    }
-    return;
-  }
-  
-  // Undo/Redo functionality
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
-    e.preventDefault();
-    undo();
-    return;
-  } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
-    e.preventDefault();
-    redo();
-    return;
-  }
-  
-  if (e.key === "Delete") {
-    if (state.tool === "module" && state.selectedModuleId) {
-      // Delete selected module
-      deleteModule(state.selectedModuleId);
-    } else if (state.selectedId) {
-      // Delete selected object
-      const activeModule = getActiveModule();
-      if (activeModule) {
-        saveToHistory(); // Save state before deletion
-        activeModule.objects = activeModule.objects.filter(o=>o.id!==state.selectedId);
-        state.selectedId = null;
-        saveState();
-        render();
-      }
-    }
-  } else if (e.key.toLowerCase() === "r") {
-    // rotation placeholder: swap w/h for axis-aligned rectangles
-    const objects = getActiveObjects();
-    const obj = objects.find(o=>o.id===state.selectedId);
-    if (obj && obj.type !== "cable") {
-      saveToHistory(); // Save state before rotation
-      const t = obj.w; obj.w = obj.h; obj.h = t;
-      saveState();
-      render();
-    }
-  } else if (e.key.toLowerCase() === "v") {
-    state.tool = "select"; markToolActive();
-  } else if (e.key.toLowerCase() === "c") {
-    state.tool = "cable"; state.cableDraft = { id: genId(), type: "cable", points: [] }; markToolActive();
-  } else if (e.key.toLowerCase() === "m") {
-    state.tool = "module"; markToolActive();
-  } else if (e.key.toLowerCase() === "o") {
-    toggleOverviewMode();
-  } else if (e.code === "KeyD" && (e.ctrlKey || e.metaKey)) {
-    const objects = getActiveObjects();
-    const obj = objects.find(o=>o.id===state.selectedId);
-    if (obj) {
-      const activeModule = getActiveModule();
-      if (activeModule) {
-        saveToHistory(); // Save state before duplication
-        const clone = JSON.parse(JSON.stringify(obj));
-        clone.id = genId();
-        clone.x += GRID; clone.y += GRID;
-        activeModule.objects.push(clone);
-        state.selectedId = clone.id;
-        saveState();
-        render();
-      }
-    }
-  } else if (e.key === "+" || e.key === "=") {
-    // Add cable point
-    const objects = getActiveObjects();
-    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
-    if (cable && cable.points && cable.points.length > 0) {
-      saveToHistory(); // Save state before adding point
-      const activeModule = getActiveModule();
-      if (activeModule) {
-        // Add point at the end of the cable
-        const lastPoint = cable.points[cable.points.length - 1];
-        cable.points.push({
-          x: lastPoint.x + GRID,
-          y: lastPoint.y
-        });
-        saveState();
-        render();
-      }
-    }
-  } else if (e.key === "-" || e.key === "_") {
-    // Remove cable point
-    const objects = getActiveObjects();
-    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
-    if (cable && cable.points && cable.points.length > 2) {
-      saveToHistory(); // Save state before removing point
-      // Remove the last point
-      cable.points.pop();
-      saveState();
-      render();
-    }
-  }
-});
-
-function getMouse(e) {
-  const rect = canvas.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-}
-
-function render() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  
-  if (state.viewMode === "overview") {
-    drawOverviewMode();
-  } else {
-    drawHabitat();
-    drawGrid();
-    drawObjects();
-    drawValidationOverlay();
-  }
-  
-  updateStats();
-  updateOverviewButton();
-}
-
-function updateStats() {
-  if (state.viewMode === "overview") {
-    // Overview mode stats
-    const totalObjects = state.modules.reduce((sum, m) => sum + m.objects.length, 0);
-    const totalModules = state.modules.length;
-    const totalIssues = state.modules.reduce((sum, m) => {
-      const moduleObjects = m.objects;
-      const moduleIssues = validateLayoutForModule(m);
-      return sum + moduleIssues.length;
-    }, 0);
-    
-    $("#object-count").textContent = totalObjects;
-    $("#free-space").textContent = `${totalModules} modules`;
-    $("#issue-count").textContent = totalIssues;
-  } else {
-    // Single module mode stats
-    const objects = getActiveObjects();
-    const activeModule = getActiveModule();
-    const objectCount = objects.length;
-    const totalArea = activeModule ? activeModule.w * activeModule.h : 0;
-    const objectArea = objects
-      .filter(o => o.type !== "cable")
-      .reduce((sum, o) => sum + (o.w * o.h), 0);
-    const freeSpacePercent = totalArea > 0 ? Math.round(((totalArea - objectArea) / totalArea) * 100) : 100;
-    const issues = validateLayout();
-    const issueCount = issues.length;
-    
-    $("#object-count").textContent = objectCount;
-    $("#free-space").textContent = `${freeSpacePercent}%`;
-    $("#issue-count").textContent = issueCount;
-  }
-  
-  // Update module list
-  renderModuleList();
-}
-
-function validateLayoutForModule(module) {
-  const issues = [];
-  const objects = module.objects;
-  
-  // Basic validation for module
-  for (let i = 0; i < objects.length; i++) {
-    const a = objects[i];
-    if (a.type === "cable") continue;
-    
-    // inside module
-    if (a.x < 0 || a.y < 0 || a.x + a.w > module.w || a.y + a.h > module.h) {
-      issues.push({type:"error", msg:`${CATALOG[a.type].name} is outside module bounds.`});
-    }
-    
-    // overlap
-    for (let j = i + 1; j < objects.length; j++) {
-      const b = objects[j];
-      if (b.type === "cable") continue;
-      if (rectsOverlap(a, b)) {
-        issues.push({type:"error", msg:`${CATALOG[a.type].name} overlaps with ${CATALOG[b.type].name}.`});
-      }
-    }
-  }
-  
-  return issues;
-}
-
-function drawValidationOverlay() {
-  const issues = validateLayout();
-  const errorObjects = new Set();
-  const warnObjects = new Set();
-  const objects = getActiveObjects();
-  const activeModule = getActiveModule();
-  
-  // Collect objects with issues - improved logic
-  for (const issue of issues) {
-    if (issue.type === "error" || issue.type === "warn") {
-      // More precise object identification
-      for (const obj of objects) {
-        if (obj.type === "cable") continue;
-        
-        // Check if this specific object is mentioned in the issue
-        const objName = CATALOG[obj.type].name;
-        const isSpecificObject = issue.msg.includes(objName) && 
-          (issue.msg.includes("overlaps with") || 
-           issue.msg.includes("blocks") || 
-           issue.msg.includes("outside") ||
-           issue.msg.includes("too close") ||
-           issue.msg.includes("access zone is obstructed"));
-        
-        if (isSpecificObject) {
-          if (issue.type === "error") errorObjects.add(obj.id);
-          else warnObjects.add(obj.id);
-        }
-      }
-    }
-  }
-  
-  // Draw overlay indicators
-  for (const obj of objects) {
-    if (obj.type === "cable") continue;
-    
-    const objX = activeModule.x + obj.x;
-    const objY = activeModule.y + obj.y;
-    
-    if (errorObjects.has(obj.id)) {
-      // Red error overlay
-      ctx.save();
-      ctx.globalAlpha = 0.3;
-      ctx.fillStyle = "#ff6b6b";
-      ctx.fillRect(objX, objY, obj.w, obj.h);
-      ctx.restore();
-    } else if (warnObjects.has(obj.id)) {
-      // Yellow warning overlay
-      ctx.save();
-      ctx.globalAlpha = 0.2;
-      ctx.fillStyle = "#ffd93d";
-      ctx.fillRect(objX, objY, obj.w, obj.h);
-      ctx.restore();
-    }
-  }
-}
-
-function markToolActive() {
-  $("#tool-select").classList.toggle("active", state.tool === "select");
-  $("#tool-cable").classList.toggle("active", state.tool === "cable");
-  $("#tool-module").classList.toggle("active", state.tool === "module");
-}
-
-// Module management functions
-function addModule(templateKey = 'standard', customConfig = null) {
-  saveToHistory(); // Save state before adding module
+function addModule(templateKey = "standard", customConfig = null) {
+  saveToHistory();
   const moduleCount = state.modules.length;
   let template, moduleName, moduleColor, moduleType, corridorWidth;
-  
+
   if (customConfig) {
-    // Use custom configuration from modal
-    template = customConfig.template;
-    moduleName = customConfig.name;
-    moduleColor = customConfig.color;
-    moduleType = customConfig.type;
-    corridorWidth = customConfig.corridorWidth;
+    ({ template, name: moduleName, color: moduleColor, type: moduleType } = customConfig);
+    corridorWidth = customConfig.corridorWidth ?? template.corridor.w;
   } else {
-    // Use template configuration
     template = MODULE_TEMPLATES[templateKey];
     moduleName = `${template.name} Module ${moduleCount + 1}`;
     moduleColor = "#0d1b26";
     moduleType = "habitat";
     corridorWidth = template.corridor.w;
   }
-  
-  const offsetX = 50 + (moduleCount * 30);
-  const offsetY = 50 + (moduleCount * 30);
-  
+
+  const offsetX = 50 + moduleCount * 30;
+  const offsetY = 50 + moduleCount * 30;
+
   const newModule = {
     id: `module-${moduleCount + 1}`,
     name: moduleName,
-    x: offsetX,
-    y: offsetY,
-    w: template.w,
-    h: template.h,
-    corridor: { 
-      x: offsetX + (template.w - corridorWidth) / 2, 
-      y: offsetY + (template.h - template.corridor.h) / 2, 
-      w: corridorWidth, 
-      h: template.corridor.h 
+    x: offsetX, y: offsetY,
+    w: template.w, h: template.h,
+    corridor: {
+      x: offsetX + (template.w - corridorWidth) / 2,
+      y: offsetY + (template.h - template.corridor.h) / 2,
+      w: corridorWidth,
+      h: template.corridor.h
     },
     objects: [],
     color: moduleColor,
@@ -1283,540 +285,511 @@ function addModule(templateKey = 'standard', customConfig = null) {
   state.modules.push(newModule);
   state.activeModuleId = newModule.id;
   state.selectedId = null;
-  state.cableDraft = null; // Clear any draft cables when adding new module
-  
-  // Auto-create connection to previous module
+  state.cableDraft = null;
+
+  // simple auto-connection
   if (moduleCount > 0) {
-    const prevModule = state.modules[moduleCount - 1];
-    state.connections.push({
-      id: `conn-${state.connections.length + 1}`,
-      from: prevModule.id,
-      to: newModule.id,
-      type: "Habitat Link"
-    });
+    const prev = state.modules[moduleCount - 1];
+    state.connections.push({ id: `conn-${state.connections.length + 1}`, from: prev.id, to: newModule.id, type: "Habitat Link" });
   }
-  
+
   saveState();
   renderModuleList();
   render();
 }
 
-function switchModule(moduleId) {
-  state.activeModuleId = moduleId;
+function switchModule(id) {
+  state.activeModuleId = id;
   state.selectedId = null;
-  state.cableDraft = null; // Clear any draft cables when switching modules
+  state.cableDraft = null;
   saveState();
   renderModuleList();
   render();
 }
-
-function deleteModule(moduleId) {
-  if (state.modules.length <= 1) {
-    alert("Cannot delete the last module!");
-    return;
-  }
-  
-  saveToHistory(); // Save state before deleting module
-  
-  // Remove module
-  state.modules = state.modules.filter(m => m.id !== moduleId);
-  
-  // Remove connections involving this module
-  state.connections = state.connections.filter(c => c.from !== moduleId && c.to !== moduleId);
-  
-  // If deleted module was active, switch to first available module
-  if (state.activeModuleId === moduleId) {
-    state.activeModuleId = state.modules[0].id;
-  }
-  
-  // Clear selections
+function deleteModule(id) {
+  if (state.modules.length <= 1) return alert("Cannot delete the last module!");
+  saveToHistory();
+  state.modules = state.modules.filter(m => m.id !== id);
+  state.connections = state.connections.filter(c => c.from !== id && c.to !== id);
+  if (state.activeModuleId === id) state.activeModuleId = state.modules[0]?.id;
   state.selectedId = null;
   state.selectedModuleId = null;
   state.cableDraft = null;
-  
   saveState();
   renderModuleList();
   render();
 }
-
-function resizeModule(moduleId, newWidth, newHeight) {
-  const module = state.modules.find(m => m.id === moduleId);
-  if (module) {
-    module.w = Math.max(200, newWidth); // Minimum width
-    module.h = Math.max(150, newHeight); // Minimum height
-    
-    // Update corridor position to center
-    module.corridor.x = module.x + (module.w - module.corridor.w) / 2;
-    module.corridor.y = module.y + (module.h - module.corridor.h) / 2;
-    
-    saveState();
-    render();
-  }
+function resizeModule(id, newW, newH) {
+  const m = state.modules.find(x => x.id === id);
+  if (!m) return;
+  m.w = Math.max(MIN_MODULE_W, snap(newW));
+  m.h = Math.max(MIN_MODULE_H, snap(newH));
+  // keep corridor centered
+  m.corridor.x = m.x + (m.w - m.corridor.w) / 2;
+  m.corridor.y = m.y + (m.h - m.corridor.h) / 2;
 }
 
-function editModule(moduleId) {
-  const module = state.modules.find(m => m.id === moduleId);
-  if (!module) return;
-  
-  // Populate edit modal with current module data
-  $("#edit-module-name").value = module.name;
-  $("#edit-module-width").value = module.w;
-  $("#edit-module-height").value = module.h;
-  $("#edit-module-color").value = module.color || "#0d1b26";
-  $("#edit-module-type").value = module.type || "habitat";
-  
-  // Store current module ID for saving
-  state.editingModuleId = moduleId;
-  
-  // Show edit modal
-  $("#edit-modal").style.display = "block";
-}
-
-// Modal functions
-function showModuleModal() {
-  const modal = $("#module-modal");
-  modal.style.display = "block";
-  
-  // Reset form to default values
-  $("#module-name").value = "New Module";
-  $("#module-template-select").value = "standard";
-  $("#module-color").value = "#0d1b26";
-  $("#module-type").value = "habitat";
-  // corridor width removed
-  
-  // Hide custom size group initially
-  $("#custom-size-group").style.display = "none";
-}
-
-function hideModuleModal() {
-  const modal = $("#module-modal");
-  modal.style.display = "none";
-}
-
-function hideEditModal() {
-  const modal = $("#edit-modal");
-  modal.style.display = "none";
-  state.editingModuleId = null;
-}
-
-function saveModuleChanges() {
-  if (!state.editingModuleId) return;
-  
-  const module = state.modules.find(m => m.id === state.editingModuleId);
-  if (!module) return;
-  
-  const name = $("#edit-module-name").value.trim();
-  const width = parseInt($("#edit-module-width").value);
-  const height = parseInt($("#edit-module-height").value);
-  const color = $("#edit-module-color").value;
-  const type = $("#edit-module-type").value;
-  
-  if (!name) {
-    alert("Please enter a module name!");
-    return;
-  }
-  
-  if (width < 200 || height < 150) {
-    alert("Minimum size is 200x150 pixels!");
-    return;
-  }
-  
-  // Update module properties
-  module.name = name;
-  module.color = color;
-  module.type = type;
-  
-  // Update size if changed
-  if (width !== module.w || height !== module.h) {
-    resizeModule(state.editingModuleId, width, height);
-  }
-  
-  saveState();
-  renderModuleList();
-  render();
-  hideEditModal();
-}
-
-// corridor width display removed
-
-function updateCustomSizeGroup() {
-  const template = $("#module-template-select").value;
-  const customGroup = $("#custom-size-group");
-  
-  if (template === "custom") {
-    customGroup.style.display = "block";
-  } else {
-    customGroup.style.display = "none";
-    // Update width/height based on template
-    const templateData = MODULE_TEMPLATES[template];
-    if (templateData) {
-      $("#module-width").value = templateData.w;
-      $("#module-height").value = templateData.h;
-    }
-  }
-}
-
-function renderModuleList() {
-  const list = document.getElementById("module-list");
-  list.innerHTML = "";
-  
-  for (const module of state.modules) {
-    const div = document.createElement("div");
-    div.className = `module-item ${module.id === state.activeModuleId ? 'active' : ''}`;
-    div.innerHTML = `
-      <span class="module-name">${module.name}</span>
-      <span class="module-count">${module.objects.length} objects</span>
-    `;
-    div.addEventListener("click", () => switchModule(module.id));
-    list.appendChild(div);
-  }
-}
-
-// Overview mode functions
-function toggleOverviewMode() {
-  state.viewMode = state.viewMode === "single" ? "overview" : "single";
-  state.selectedId = null;
-  state.cableDraft = null;
+// --------------------------- Object helpers ---------------------------
+function addObject(type, x, y) {
+  const m = getActiveModule(); if (!m) return;
+  const cat = CATALOG[type]; if (!cat) return;
+  const obj = {
+    id: genId(),
+    type,
+    x: snap(x - m.x), // module-relative
+    y: snap(y - m.y),
+    w: cat.w ?? 40,
+    h: cat.h ?? 40
+  };
+  m.objects.push(obj);
+  state.selectedId = obj.id;
   saveState();
   render();
 }
 
-function drawOverviewMode() {
-  // Clear canvas
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  
-  // Draw all modules
-  for (const module of state.modules) {
-    drawModuleInOverview(module);
-  }
-  
-  // Draw module connections
-  drawModuleConnections();
+function findObjectById(id) {
+  const m = getActiveModule(); if (!m) return null;
+  return m.objects.find(o => o.id === id) || null;
 }
 
-function drawModuleInOverview(module) {
-  const scale = state.overviewScale;
-  const x = module.x * scale;
-  const y = module.y * scale;
-  const w = module.w * scale;
-  const h = module.h * scale;
-  
-  // Module border
-  ctx.fillStyle = "#0d1b26";
-  ctx.strokeStyle = module.id === state.activeModuleId ? "#3b82f6" : "#284157";
-  ctx.lineWidth = module.id === state.activeModuleId ? 3 : 2;
-  roundRect(x, y, w, h, 8, true, true);
-  
-  // Corridor removed from overview
-  
-  // Module name
-  ctx.fillStyle = "#9ad";
-  ctx.font = "bold 10px system-ui";
-  ctx.fillText(module.name, x + 5, y - 5);
-  
-  // Objects count
-  ctx.fillStyle = "#7aa2f7";
-  ctx.font = "8px system-ui";
-  ctx.fillText(`${module.objects.length} objects`, x + 5, y + h + 12);
-  
-  // Draw objects as small dots
-  for (const obj of module.objects) {
-    if (obj.type === "cable") continue;
-    const cat = CATALOG[obj.type];
-    ctx.fillStyle = cat.color;
-    ctx.fillRect(
-      x + (obj.x * scale), 
-      y + (obj.y * scale), 
-      Math.max(2, obj.w * scale), 
-      Math.max(2, obj.h * scale)
-    );
-  }
+function clampObjectToModule(obj) {
+  const m = getActiveModule(); if (!m) return;
+  obj.w = clamp(obj.w, MIN_OBJECT_W, m.w);
+  obj.h = clamp(obj.h, MIN_OBJECT_H, m.h);
+  obj.x = clamp(obj.x, 0, m.w - obj.w);
+  obj.y = clamp(obj.y, 0, m.h - obj.h);
 }
 
-function drawModuleConnections() {
-  // Draw connections between modules (solid lines)
-  ctx.strokeStyle = "#666";
-  ctx.lineWidth = 2;
-  ctx.setLineDash([]); // Solid lines instead of dashed
-  
-  for (const connection of state.connections) {
-    const module1 = state.modules.find(m => m.id === connection.from);
-    const module2 = state.modules.find(m => m.id === connection.to);
-    
-    if (module1 && module2) {
-      const x1 = module1.x + module1.w / 2;
-      const y1 = module1.y + module1.h / 2;
-      const x2 = module2.x + module2.w / 2;
-      const y2 = module2.y + module2.h / 2;
-      
-      ctx.beginPath();
-      ctx.moveTo(x1 * state.overviewScale, y1 * state.overviewScale);
-      ctx.lineTo(x2 * state.overviewScale, y2 * state.overviewScale);
-      ctx.stroke();
-      
-      // Draw connection label
-      const midX = (x1 + x2) / 2 * state.overviewScale;
-      const midY = (y1 + y2) / 2 * state.overviewScale;
-      ctx.fillStyle = "#9ad";
-      ctx.font = "8px system-ui";
-      ctx.fillText(connection.type || "Connection", midX, midY - 5);
-    }
-  }
-}
-
-/* ---------------- UI wiring ---------------- */
-// Category menu functionality
-$$(".category-btn").forEach(btn => {
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const category = btn.dataset.category;
-    const menu = document.getElementById(`${category}-menu`);
-    
-    // Close all other menus
-    $$(".category-menu").forEach(m => {
-      if (m !== menu) {
-        m.style.display = "none";
-        m.previousElementSibling.classList.remove("active");
-      }
-    });
-    
-    // Toggle current menu
-    if (menu.style.display === "none" || menu.style.display === "") {
-      menu.style.display = "block";
-      btn.classList.add("active");
-    } else {
-      menu.style.display = "none";
-      btn.classList.remove("active");
-    }
-  });
-});
-
-// Close menus when clicking outside
+// --------------------------- UI wiring (sidebar/catalog) ---------------------------
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".category-group")) {
-    $$(".category-menu").forEach(menu => {
-      menu.style.display = "none";
-      menu.previousElementSibling.classList.remove("active");
-    });
+  const btn = e.target.closest(".category-btn");
+  if (btn) {
+    const cat = btn.dataset.category;
+    const menu = document.getElementById(`${cat}-menu`);
+    if (menu) {
+      const isOpen = menu.style.display !== "none";
+      $$(".category-menu").forEach(m => (m.style.display = "none"));
+      $$(".category-btn").forEach(b => b.classList.remove("active"));
+      if (!isOpen) { menu.style.display = "block"; btn.classList.add("active"); }
+    }
+  } else if (!e.target.closest(".category-group")) {
+    $$(".category-menu").forEach(m => (m.style.display = "none"));
+    $$(".category-btn").forEach(b => b.classList.remove("active"));
   }
 });
 
-// Item click handlers
-$$(".catalog .item").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const type = btn.dataset.type;
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      addObject(type, activeModule.x + GRID, activeModule.y + GRID);
-    }
+// catalog item click
+$$(".catalog .item").forEach(b => {
+  b.addEventListener("click", () => {
+    const type = b.dataset.type;
+    const m = getActiveModule();
+    if (m) addObject(type, m.x + GRID, m.y + GRID);
   });
 });
 
-$("#btn-rotate").addEventListener("click", () => {
-  const objects = getActiveObjects();
-  const obj = objects.find(o=>o.id===state.selectedId);
-  if (obj && obj.type !== "cable") {
-    const t = obj.w; obj.w = obj.h; obj.h = t;
-    saveState();
-    render();
-  }
-});
+// --------------------------- Buttons / Tools ---------------------------
+function markToolActive() {
+  $("#tool-select")?.classList.toggle("active", state.tool === "select");
+  $("#tool-cable")?.classList.toggle("active", state.tool === "cable");
+  $("#tool-module")?.classList.toggle("active", state.tool === "module");
+}
 
-$("#btn-duplicate").addEventListener("click", () => {
-  const objects = getActiveObjects();
-  const obj = objects.find(o=>o.id===state.selectedId);
-  if (obj) {
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      const clone = JSON.parse(JSON.stringify(obj));
-      clone.id = genId();
-      clone.x += GRID; clone.y += GRID;
-      activeModule.objects.push(clone);
-      state.selectedId = clone.id;
-      saveState();
-      render();
-    }
-  }
-});
-
-$("#btn-delete").addEventListener("click", () => {
-  if (state.selectedId) {
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      activeModule.objects = activeModule.objects.filter(o=>o.id!==state.selectedId);
-      state.selectedId = null;
-      saveState();
-      render();
-    }
-  }
-});
-
-$("#tool-select").addEventListener("click", () => {
+$("#tool-select")?.addEventListener("click", () => {
   state.tool = "select";
   state.cableDraft = null;
-  markToolActive();
+  markToolActive(); render();
 });
 
-$("#tool-cable").addEventListener("click", () => {
+$("#tool-cable")?.addEventListener("click", () => {
   state.tool = "cable";
   state.cableDraft = { id: genId(), type: "cable", points: [] };
-  markToolActive();
+  markToolActive(); render();
 });
 
-$("#tool-module").addEventListener("click", () => {
+$("#tool-module")?.addEventListener("click", () => {
   state.tool = "module";
-  markToolActive();
+  state.selectedModuleId = state.activeModuleId;
+  markToolActive(); render();
 });
 
-$("#btn-analyze").addEventListener("click", analyzeAI);
-
-$("#ai-source").addEventListener("change", e => {
-  state.aiSource = e.target.value;
-  saveState();
+$("#btn-rotate")?.addEventListener("click", () => {
+  const obj = findObjectById(state.selectedId);
+  if (obj && obj.type !== "cable") {
+    saveToHistory();
+    [obj.w, obj.h] = [obj.h, obj.w];
+    clampObjectToModule(obj);
+    saveState(); render();
+  }
 });
 
-$("#btn-export").addEventListener("click", () => {
-  const data = JSON.stringify({ 
-    modules: state.modules,
-    activeModuleId: state.activeModuleId,
-    version: "2.0"
-  }, null, 2);
+$("#btn-duplicate")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  const obj = findObjectById(state.selectedId); if (!obj) return;
+  saveToHistory();
+  const clone = JSON.parse(JSON.stringify(obj));
+  clone.id = genId();
+  clone.x = clamp(snap(clone.x + GRID), 0, m.w - clone.w);
+  clone.y = clamp(snap(clone.y + GRID), 0, m.h - clone.h);
+  m.objects.push(clone);
+  state.selectedId = clone.id;
+  saveState(); render();
+});
+
+$("#btn-delete")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  if (!state.selectedId) return;
+  saveToHistory();
+  m.objects = m.objects.filter(o => o.id !== state.selectedId);
+  state.selectedId = null;
+  saveState(); render();
+});
+
+$("#btn-export")?.addEventListener("click", () => {
+  const data = JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId, version: "2.0" }, null, 2);
   const blob = new Blob([data], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = "habitat-layout.json";
-  a.click(); URL.revokeObjectURL(url);
+  a.href = url; a.download = "habitat-layout.json"; a.click();
+  URL.revokeObjectURL(url);
 });
 
-$("#btn-import").addEventListener("click", () => $("#import-file").click());
-$("#import-file").addEventListener("change", async e => {
-  const file = e.target.files[0]; if (!file) return;
+$("#btn-import")?.addEventListener("click", () => $("#import-file")?.click());
+$("#import-file")?.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0]; if (!file) return;
   const txt = await file.text();
   try {
     const data = JSON.parse(txt);
+    saveToHistory();
     if (data.modules) {
-      // New format
       state.modules = data.modules;
-      state.activeModuleId = data.activeModuleId || "module-1";
+      state.activeModuleId = data.activeModuleId || state.modules[0]?.id || "module-1";
     } else if (data.objects) {
-      // Legacy format
+      // legacy
       state.modules[0].objects = data.objects;
     }
-    state.selectedId = null;
-    saveState();
-    render();
-  } catch (err) { alert("Invalid JSON"); }
+    state.selectedId = null; state.cableDraft = null;
+    saveState(); renderModuleList(); render();
+  } catch { alert("Invalid JSON"); }
 });
 
-$("#btn-reset").addEventListener("click", () => {
-  if (confirm("Clear current layout?")) {
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      activeModule.objects = [];
-    }
-    state.selectedId = null;
-    state.cableDraft = null; // Clear any draft cables
-    saveState();
-    render();
+$("#btn-reset")?.addEventListener("click", () => {
+  if (!confirm("Clear current layout?")) return;
+  const m = getActiveModule(); if (!m) return;
+  saveToHistory();
+  m.objects = [];
+  state.selectedId = null; state.cableDraft = null;
+  saveState(); render();
+});
+
+$("#btn-add-module")?.addEventListener("click", () => showModuleModal());
+$("#btn-overview")?.addEventListener("click", () => toggleOverviewMode());
+$("#btn-edit-module")?.addEventListener("click", () => state.selectedModuleId && editModule(state.selectedModuleId));
+$("#btn-delete-module")?.addEventListener("click", () => {
+  if (!state.selectedModuleId) return;
+  if (confirm("Delete this module?")) deleteModule(state.selectedModuleId);
+});
+
+$("#btn-undo")?.addEventListener("click", undo);
+$("#btn-redo")?.addEventListener("click", redo);
+
+// Keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+  if (e.key === "v" || e.key === "V") { state.tool = "select"; markToolActive(); }
+  if (e.key === "c" || e.key === "C") { state.tool = "cable";  markToolActive(); }
+  if (e.key === "m" || e.key === "M") { state.tool = "module"; state.selectedModuleId = state.activeModuleId; markToolActive(); }
+  if (e.key === "r" || e.key === "R") { $("#btn-rotate")?.click(); }
+  if (e.key === "Delete")           { $("#btn-delete")?.click(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") { e.preventDefault(); $("#btn-duplicate")?.click(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) {
+    e.preventDefault(); redo();
   }
 });
 
-$("#btn-add-module").addEventListener("click", () => {
-  showModuleModal();
-});
+// --------------------------- Modals (create/edit) ---------------------------
+function showModuleModal() {
+  const modal = $("#module-modal"); if (!modal) return;
+  modal.style.display = "block";
+  $("#module-name").value = `Module ${state.modules.length + 1}`;
+  $("#module-template-select").value = "standard";
+  $("#module-color").value = "#0d1b26";
+  $("#module-type").value = "habitat";
+  $("#custom-size-group").style.display = "none";
+}
 
-$("#btn-overview").addEventListener("click", toggleOverviewMode);
+function hideModuleModal(){ $("#module-modal")?.style && ($("#module-modal").style.display = "none"); }
+function hideEditModal(){ $("#edit-modal")?.style && ($("#edit-modal").style.display = "none"); state.editingModuleId = null; }
 
-$("#btn-edit-module").addEventListener("click", () => {
-  if (state.selectedModuleId) {
-    editModule(state.selectedModuleId);
-  }
-});
-
-$("#btn-delete-module").addEventListener("click", () => {
-  if (state.selectedModuleId) {
-    if (confirm("Are you sure you want to delete this module?")) {
-      deleteModule(state.selectedModuleId);
-    }
-  }
-});
-
-// Modal event listeners
-$("#btn-create-module").addEventListener("click", () => {
+$("#btn-create-module")?.addEventListener("click", () => {
   const name = $("#module-name").value.trim();
-  const template = $("#module-template-select").value;
+  const templateKey = $("#module-template-select").value;
   const color = $("#module-color").value;
   const type = $("#module-type").value;
-  const corridorWidth = 80; // default corridor width
-  
-  if (!name) {
-    alert("Please enter a module name!");
-    return;
+  if (!name) return alert("Please enter a module name!");
+
+  let templateData = MODULE_TEMPLATES[templateKey];
+  if (templateKey === "custom") {
+    const width = parseInt($("#module-width").value, 10);
+    const height = parseInt($("#module-height").value, 10);
+    if (width < MIN_MODULE_W || height < MIN_MODULE_H) return alert(`Minimum size is ${MIN_MODULE_W}x${MIN_MODULE_H}px`);
+    templateData = { w: width, h: height, corridor: { w: Math.max(80, Math.min(width - 160, 600)), h: 80 } };
   }
-  
-  let templateData;
-  if (template === "custom") {
-    const width = parseInt($("#module-width").value);
-    const height = parseInt($("#module-height").value);
-    
-    if (width < 200 || height < 150) {
-      alert("Minimum size is 200x150 pixels!");
-      return;
-    }
-    
-    templateData = {
-      w: width,
-      h: height,
-      corridor: { w: corridorWidth, h: 80 }
-    };
-  } else {
-    templateData = MODULE_TEMPLATES[template];
-    templateData.corridor.w = corridorWidth;
-  }
-  
-  const customConfig = {
-    template: templateData,
-    name: name,
-    color: color,
-    type: type,
-    corridorWidth: corridorWidth
-  };
-  
-  addModule(null, customConfig);
+  addModule(null, { template: templateData, name, color, type, corridorWidth: templateData.corridor.w });
   hideModuleModal();
 });
+$("#btn-cancel-module")?.addEventListener("click", hideModuleModal);
+$(".close")?.addEventListener("click", hideModuleModal);
 
-$("#btn-cancel-module").addEventListener("click", hideModuleModal);
+$("#btn-save-module")?.addEventListener("click", () => {
+  const id = state.editingModuleId; if (!id) return;
+  const m = state.modules.find(mm => mm.id === id); if (!m) return;
+  const name = $("#edit-module-name").value.trim();
+  const width = parseInt($("#edit-module-width").value, 10);
+  const height = parseInt($("#edit-module-height").value, 10);
+  const color = $("#edit-module-color").value;
+  const type = $("#edit-module-type").value;
+  if (!name) return alert("Please enter a module name!");
+  if (width < MIN_MODULE_W || height < MIN_MODULE_H) return alert(`Minimum size is ${MIN_MODULE_W}x${MIN_MODULE_H}px`);
+  saveToHistory();
+  m.name = name; m.color = color; m.type = type;
+  resizeModule(id, width, height);
+  saveState(); renderModuleList(); render(); hideEditModal();
+});
+$("#btn-cancel-edit")?.addEventListener("click", hideEditModal);
+$(".close-edit")?.addEventListener("click", hideEditModal);
 
-$(".close").addEventListener("click", hideModuleModal);
-
-// Edit modal event listeners
-$("#btn-save-module").addEventListener("click", saveModuleChanges);
-
-$("#btn-cancel-edit").addEventListener("click", hideEditModal);
-
-$(".close-edit").addEventListener("click", hideEditModal);
-
-// Close modal when clicking outside
-window.addEventListener("click", (e) => {
-  const moduleModal = $("#module-modal");
-  const editModal = $("#edit-modal");
-  
-  if (e.target === moduleModal) {
-    hideModuleModal();
-  } else if (e.target === editModal) {
-    hideEditModal();
+$("#module-template-select")?.addEventListener("change", () => {
+  const key = $("#module-template-select").value;
+  $("#custom-size-group").style.display = key === "custom" ? "block" : "none";
+  if (MODULE_TEMPLATES[key]) {
+    $("#module-width").value = MODULE_TEMPLATES[key].w;
+    $("#module-height").value = MODULE_TEMPLATES[key].h;
   }
 });
 
-// Template change handler
-$("#module-template-select").addEventListener("change", updateCustomSizeGroup);
+// --------------------------- Rendering ---------------------------
+function drawGrid() {
+  const m = getActiveModule(); if (!m) return;
+  ctx.save();
+  ctx.strokeStyle = "#11202c";
+  ctx.lineWidth = 1;
+  for (let x = m.x; x <= m.x + m.w; x += GRID) {
+    ctx.beginPath(); ctx.moveTo(x, m.y); ctx.lineTo(x, m.y + m.h); ctx.stroke();
+  }
+  for (let y = m.y; y <= m.y + m.h; y += GRID) {
+    ctx.beginPath(); ctx.moveTo(m.x, y); ctx.lineTo(m.x + m.w, y); ctx.stroke();
+  }
+  ctx.restore();
+}
 
-// corridor width slider removed
+function drawResizeHandlesForRect(rx, ry, rw, rh) {
+  const s = HANDLE_WORLD;
+  const pts = [
+    {k:"nw", x:rx,        y:ry       },
+    {k:"n",  x:rx+rw/2,   y:ry       },
+    {k:"ne", x:rx+rw,     y:ry       },
+    {k:"w",  x:rx,        y:ry+rh/2  },
+    {k:"e",  x:rx+rw,     y:ry+rh/2  },
+    {k:"sw", x:rx,        y:ry+rh    },
+    {k:"s",  x:rx+rw/2,   y:ry+rh    },
+    {k:"se", x:rx+rw,     y:ry+rh    }
+  ];
+  ctx.save();
+  ctx.fillStyle = "#ffd166";
+  for (const p of pts) ctx.fillRect(p.x - s, p.y - s, s*2, s*2);
+  ctx.restore();
+}
 
-// Update overview button text based on current mode
+function getResizeHandleAtPointRect(px, py, rx, ry, rw, rh) {
+  const s = HANDLE_WORLD * 1.5; // bit easier to hit
+  const spots = [
+    {k:"nw", x:rx,        y:ry       },
+    {k:"n",  x:rx+rw/2,   y:ry       },
+    {k:"ne", x:rx+rw,     y:ry       },
+    {k:"w",  x:rx,        y:ry+rh/2  },
+    {k:"e",  x:rx+rw,     y:ry+rh/2  },
+    {k:"sw", x:rx,        y:ry+rh    },
+    {k:"s",  x:rx+rw/2,   y:ry+rh    },
+    {k:"se", x:rx+rw,     y:ry+rh    }
+  ];
+  for (const p of spots) {
+    if (Math.abs(px - p.x) <= s && Math.abs(py - p.y) <= s) return p.k;
+  }
+  return null;
+}
+
+function drawHabitat() {
+  const m = getActiveModule(); if (!m) return;
+
+  // module body
+  ctx.fillStyle = m.color || "#0d1b26";
+  ctx.strokeStyle = "#284157"; ctx.lineWidth = 2;
+  roundRect(m.x, m.y, m.w, m.h, 16, true, true);
+
+  // selected frame + handles (module tool)
+  if (state.tool === "module" && state.selectedModuleId === m.id) {
+    ctx.save();
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 2;
+    roundRect(m.x - 2, m.y - 2, m.w + 4, m.h + 4, 18, false, true);
+    drawResizeHandlesForRect(m.x, m.y, m.w, m.h);
+    ctx.restore();
+  }
+
+  // label
+  ctx.fillStyle = "#9ad";
+  ctx.font = "bold 14px system-ui";
+  ctx.fillText(m.name, m.x + 8, m.y - 10);
+}
+
+function drawObjects() {
+  const m = getActiveModule(); if (!m) return;
+  const objs = m.objects;
+
+  for (const o of objs) {
+    if (o.type === "cable") { 
+      drawCable(o, m); 
+      continue; 
+    }
+
+    const cat = CATALOG[o.type] || { name: o.type, color: "#999" };
+    const gx = m.x + o.x, gy = m.y + o.y;
+
+    // 1) базова підкладка (як було)
+    ctx.fillStyle = cat.color;
+    ctx.strokeStyle = "#0b0b0b"; 
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(gx, gy, o.w, o.h);
+    ctx.strokeRect(gx, gy, o.w, o.h);
+
+    // 2) іконка, якщо є
+    const img = itemImages[o.type];
+    if (img && img.complete && img.naturalWidth) {
+      // Вписуємо в область об'єкта; за бажанням додай відступи
+      // const pad = 6; ctx.drawImage(img, gx+pad, gy+pad, o.w-2*pad, o.h-2*pad);
+      ctx.drawImage(img, gx, gy, o.w, o.h);
+    }
+
+    // 3) напис (залишив як було; якщо хочеш мінімалістично — просто прибери ці три рядки)
+    ctx.fillStyle = "#e6e6e6";
+    ctx.font = "12px system-ui";
+    ctx.fillText(cat.name, gx + 6, gy + 16);
+
+    // 4) рамка виділення + хендли
+    if (state.selectedId === o.id) {
+      ctx.save();
+      ctx.strokeStyle = "#ffd166"; 
+      ctx.lineWidth = 2;
+      ctx.strokeRect(gx - 2, gy - 2, o.w + 4, o.h + 4);
+      drawResizeHandlesForRect(gx, gy, o.w, o.h);
+      ctx.restore();
+    }
+  }
+
+  // пунктир для чернетки кабелю (без змін)
+  if (state.cableDraft?.points?.length) {
+    const pts = state.cableDraft.points;
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = CATALOG.cable.color;
+    ctx.beginPath();
+    const p0 = { x: getActiveModule().x + pts[0].x, y: getActiveModule().y + pts[0].y };
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < pts.length; i++) {
+      const pg = { x: getActiveModule().x + pts[i].x, y: getActiveModule().y + pts[i].y };
+      ctx.lineTo(pg.x, pg.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+
+function drawCable(cable, m) {
+  const pts = cable.points || [];
+  if (pts.length < 2) return;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#e0af68";
+  ctx.beginPath();
+  ctx.moveTo(m.x + pts[0].x, m.y + pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(m.x + pts[i].x, m.y + pts[i].y);
+  ctx.stroke();
+
+  // points if cable selected
+  if (state.selectedId === cable.id) {
+    ctx.fillStyle = "#ffd166";
+    for (const p of pts) ctx.fillRect(m.x + p.x - 4, m.y + p.y - 4, 8, 8);
+  }
+  ctx.restore();
+}
+
+function drawValidationOverlay(){ /* stub for now */ }
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.setTransform(view.zoom, 0, 0, view.zoom, view.offsetX, view.offsetY);
+
+  if (state.viewMode === "overview") {
+    drawOverviewMode();
+  } else {
+    drawStarryBackground();
+    drawHabitat();
+    drawGrid();
+    drawObjects();
+    drawValidationOverlay();
+  }
+
+  ctx.restore();
+  updateStats();
+  updateOverviewButton();
+}
+
+// --------------------------- Overview Mode ---------------------------
+function toggleOverviewMode() {
+  state.viewMode = state.viewMode === "single" ? "overview" : "single";
+  state.selectedId = null; state.cableDraft = null;
+  saveState(); render();
+}
+
+function drawOverviewMode() {
+  // simple scaled preview of modules
+  const scale = state.overviewScale;
+  for (const m of state.modules) {
+    const x = m.x * scale, y = m.y * scale, w = m.w * scale, h = m.h * scale;
+    ctx.fillStyle = m.color || "#0d1b26";
+    ctx.strokeStyle = m.id === state.activeModuleId ? "#3b82f6" : "#284157";
+    ctx.lineWidth = m.id === state.activeModuleId ? 3 : 2;
+    roundRect(x, y, w, h, 8, true, true);
+    ctx.fillStyle = "#9ad"; ctx.font = "bold 10px system-ui";
+    ctx.fillText(m.name, x + 5, y - 5);
+  }
+  // connections
+  ctx.strokeStyle = "#666"; ctx.lineWidth = 2;
+  for (const c of state.connections) {
+    const m1 = state.modules.find(mm => mm.id === c.from);
+    const m2 = state.modules.find(mm => mm.id === c.to);
+    if (!m1 || !m2) continue;
+    const x1 = (m1.x + m1.w/2) * scale, y1 = (m1.y + m1.h/2) * scale;
+    const x2 = (m2.x + m2.w/2) * scale, y2 = (m2.y + m2.h/2) * scale;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+}
+
+// --------------------------- Stats / UI ---------------------------
+function updateStats() {
+  const m = getActiveModule(); if (!m) return;
+  $("#object-count") && ($("#object-count").textContent = m.objects.filter(o=>o.type!=="cable").length);
+  const occArea = m.objects.filter(o=>o.type!=="cable").reduce((a,o)=>a+o.w*o.h,0);
+  const free = Math.max(0, 100 - Math.round(occArea/(m.w*m.h)*100));
+  $("#free-space") && ($("#free-space").textContent = free + "%");
+  $("#issue-count") && ($("#issue-count").textContent = "0");
+}
 function updateOverviewButton() {
-  const btn = $("#btn-overview");
+  const btn = $("#btn-overview"); if (!btn) return;
   if (state.viewMode === "overview") {
     btn.textContent = "👁️ Single Mode";
     btn.style.background = "#dc2626";
@@ -1824,110 +797,449 @@ function updateOverviewButton() {
     btn.textContent = "👁️ Overview Mode";
     btn.style.background = "#7c3aed";
   }
-  
-  // Show/hide module editing buttons based on tool and selection
   const editBtn = $("#btn-edit-module");
-  const deleteBtn = $("#btn-delete-module");
-  
-  if (state.tool === "module" && state.selectedModuleId) {
-    editBtn.style.display = "block";
-    deleteBtn.style.display = "block";
-  } else {
-    editBtn.style.display = "none";
-    deleteBtn.style.display = "none";
+  const delBtn  = $("#btn-delete-module");
+  if (editBtn && delBtn) {
+    const show = state.tool === "module" && !!state.selectedModuleId;
+    editBtn.style.display = show ? "block" : "none";
+    delBtn.style.display  = show ? "block" : "none";
   }
 }
 
-// Cable tools event listeners
-$("#btn-add-cable-point").addEventListener("click", () => {
-  const objects = getActiveObjects();
-  const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
-  if (cable && cable.points && cable.points.length > 0) {
-    saveToHistory(); // Save state before adding point
-    const activeModule = getActiveModule();
-    if (activeModule) {
-      // Add point at the end of the cable
-      const lastPoint = cable.points[cable.points.length - 1];
-      cable.points.push({
-        x: lastPoint.x + GRID,
-        y: lastPoint.y
-      });
-      saveState();
-      render();
+function renderModuleList() {
+  const list = $("#module-list"); if (!list) return;
+  list.innerHTML = "";
+  for (const m of state.modules) {
+    const div = document.createElement("div");
+    div.className = `module-item ${m.id === state.activeModuleId ? "active" : ""}`;
+    div.innerHTML = `<span class="module-name">${m.name}</span><span class="module-count">${m.objects.length} objects</span>`;
+    div.addEventListener("click", () => switchModule(m.id));
+    list.appendChild(div);
+  }
+}
+renderModuleList();
+
+// --------------------------- Mouse & Tools ---------------------------
+let drag = null; // {type, ...}
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const old = view.zoom;
+  const intensity = 0.1;
+  view.zoom = clamp(view.zoom - e.deltaY * intensity / 100, MIN_ZOOM, MAX_ZOOM);
+
+  // zoom towards cursor
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const ratio = view.zoom / old;
+  view.offsetX = mx - (mx - view.offsetX) * ratio;
+  view.offsetY = my - (my - view.offsetY) * ratio;
+  render();
+});
+
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+canvas.addEventListener("mousedown", (e) => {
+  const pos = getMouse(e);
+  if (state.viewMode === "overview") {
+    // pick module to focus
+    const hits = modulesAtPoint(pos.x, pos.y);
+    if (hits.length) { switchModule(hits[hits.length-1]); state.viewMode = "single"; render(); }
+    return;
+  }
+
+  // right button => pan
+  if (e.button === 2) {
+    view.isPanning = true;
+    view.panStartX = e.clientX - view.offsetX;
+    view.panStartY = e.clientY - view.offsetY;
+    return;
+  }
+  if (e.button !== 0) return;
+
+  if (state.tool === "module") {
+    const m = getActiveModule(); if (!m) return;
+    state.selectedModuleId = m.id;
+    // handles first
+    const handle = getResizeHandleAtPointRect(pos.x, pos.y, m.x, m.y, m.w, m.h);
+    if (handle) {
+      drag = { type: "resize-module", id: m.id, handle, startX: m.x, startY: m.y, startW: m.w, startH: m.h };
+      return;
     }
+    // inside => move
+    if (pos.x >= m.x && pos.x <= m.x + m.w && pos.y >= m.y && pos.y <= m.y + m.h) {
+      drag = { type: "move-module", id: m.id, dx: pos.x - m.x, dy: pos.y - m.y };
+    }
+    return;
+  }
+
+  if (state.tool === "select") {
+    const m = getActiveModule(); if (!m) return;
+    const rx = pos.x - m.x, ry = pos.y - m.y;
+    const objs = getActiveObjects();
+
+    // try resize handles first
+    for (let i = objs.length - 1; i >= 0; i--) {
+      const o = objs[i];
+      if (o.type === "cable") continue;
+      const h = getResizeHandleAtPointRect(pos.x, pos.y, m.x + o.x, m.y + o.y, o.w, o.h);
+      if (h) {
+        state.selectedId = o.id;
+        drag = { type: "resize-object", id: o.id, handle: h, startX: o.x, startY: o.y, startW: o.w, startH: o.h };
+        render();
+        return;
+      }
+    }
+
+    // then object body
+    for (let i = objs.length - 1; i >= 0; i--) {
+      const o = objs[i];
+      if (o.type === "cable") continue;
+      if (rx >= o.x && rx <= o.x + o.w && ry >= o.y && ry <= o.y + o.h) {
+        state.selectedId = o.id;
+        drag = { type: "move-object", id: o.id, dx: rx - o.x, dy: ry - o.y };
+        render();
+        return;
+      }
+    }
+
+    // click empty
+    state.selectedId = null; render();
+    return;
+  }
+
+  if (state.tool === "cable") {
+    const m = getActiveModule(); if (!m) return;
+    const objs = getActiveObjects();
+
+    // hit test cable points
+    const r = 8;
+    for (const c of objs) {
+      if (c.type !== "cable" || !c.points) continue;
+      for (let i = 0; i < c.points.length; i++) {
+        const p = c.points[i]; const gx = m.x + p.x, gy = m.y + p.y;
+        if (Math.abs(pos.x - gx) <= r && Math.abs(pos.y - gy) <= r) {
+          state.selectedId = c.id;
+          drag = { type: "move-cable-point", id: c.id, pointIndex: i, dx: pos.x - gx, dy: pos.y - gy };
+          return;
+        }
+      }
+    }
+
+    // hit test cable segments -> drag whole cable
+    for (const c of objs) {
+      if (c.type !== "cable" || !c.points || c.points.length < 2) continue;
+      for (let i = 0; i < c.points.length - 1; i++) {
+        const p1 = c.points[i], p2 = c.points[i+1];
+        const d = distanceToLineSegment(pos.x, pos.y, m.x + p1.x, m.y + p1.y, m.x + p2.x, m.y + p2.y);
+        if (d < 8) {
+          state.selectedId = c.id;
+          drag = { type: "move-cable", id: c.id, lastX: pos.x, lastY: pos.y };
+          return;
+        }
+      }
+    }
+
+    // else: extend draft (module-relative)
+    if (!state.cableDraft) state.cableDraft = { id: genId(), type: "cable", points: [] };
+    state.cableDraft.points.push({ x: snap(pos.x - m.x), y: snap(pos.y - m.y) });
+    render();
+    return;
   }
 });
 
-$("#btn-remove-cable-point").addEventListener("click", () => {
-  const objects = getActiveObjects();
-  const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
-  if (cable && cable.points && cable.points.length > 2) {
-    saveToHistory(); // Save state before removing point
-    // Remove the last point
-    cable.points.pop();
-    saveState();
+canvas.addEventListener("mousemove", (e) => {
+  if (view.isPanning) {
+    view.offsetX = e.clientX - view.panStartX;
+    view.offsetY = e.clientY - view.panStartY;
+    render(); return;
+  }
+
+  const pos = getMouse(e);
+  if (!drag) {
+    // cursor feedback
+    if (state.tool === "module") {
+      const m = getActiveModule();
+      const handle = m ? getResizeHandleAtPointRect(pos.x, pos.y, m.x, m.y, m.w, m.h) : null;
+      canvas.style.cursor = handle ? (["n","s"].includes(handle) ? "ns-resize" :
+                                      ["e","w"].includes(handle) ? "ew-resize" :
+                                      (handle==="ne"||handle==="sw") ? "nesw-resize" : "nwse-resize")
+                                   : "default";
+    } else if (state.tool === "select") {
+      const m = getActiveModule(); if (!m) return;
+      const objs = getActiveObjects();
+      let c = "default";
+      for (let i = objs.length-1; i>=0; i--) {
+        const o = objs[i];
+        if (o.type === "cable") continue;
+        const h = getResizeHandleAtPointRect(pos.x, pos.y, m.x + o.x, m.y + o.y, o.w, o.h);
+        if (h) { c = (["n","s"].includes(h) ? "ns-resize" : ["e","w"].includes(h) ? "ew-resize" : (h==="ne"||h==="sw")?"nesw-resize":"nwse-resize"); break; }
+        const rx = pos.x - m.x, ry = pos.y - m.y;
+        if (rx >= o.x && rx <= o.x+o.w && ry >= o.y && ry <= o.y+o.h) { c = "move"; break; }
+      }
+      canvas.style.cursor = c;
+    } else {
+      canvas.style.cursor = "default";
+    }
+    return;
+  }
+
+  // dragging
+  if (drag.type === "move-module") {
+    const m = getActiveModule(); if (!m) return;
+    m.x = snap(pos.x - drag.dx); m.y = snap(pos.y - drag.dy);
+    m.corridor.x = m.x + (m.w - m.corridor.w)/2;
+    m.corridor.y = m.y + (m.h - m.corridor.h)/2;
+    render();
+  }
+  else if (drag.type === "resize-module") {
+    const m = getActiveModule(); if (!m) return;
+    let nx = drag.startX, ny = drag.startY, nw = drag.startW, nh = drag.startH;
+    const dx = pos.x - drag.startX, dy = pos.y - drag.startY;
+    switch(drag.handle){
+      case "nw": nx = drag.startX + dx; ny = drag.startY + dy; nw = drag.startW - dx; nh = drag.startH - dy; break;
+      case "ne": ny = drag.startY + dy; nw = drag.startW + dx; nh = drag.startH - dy; break;
+      case "sw": nx = drag.startX + dx; nw = drag.startW - dx; nh = drag.startH + dy; break;
+      case "se": nw = drag.startW + dx; nh = drag.startH + dy; break;
+      case "n":  ny = drag.startY + dy; nh = drag.startH - dy; break;
+      case "s":  nh = drag.startH + dy; break;
+      case "w":  nx = drag.startX + dx; nw = drag.startW - dx; break;
+      case "e":  nw = drag.startW + dx; break;
+    }
+    if (nw >= MIN_MODULE_W && nh >= MIN_MODULE_H) {
+      m.x = snap(nx); m.y = snap(ny); m.w = snap(nw); m.h = snap(nh);
+      m.corridor.x = m.x + (m.w - m.corridor.w)/2;
+      m.corridor.y = m.y + (m.h - m.corridor.h)/2;
+      render();
+    }
+  }
+  else if (drag.type === "move-object") {
+    const m = getActiveModule(); if (!m) return;
+    const o = findObjectById(drag.id); if (!o) return;
+    o.x = snap(pos.x - m.x - drag.dx);
+    o.y = snap(pos.y - m.y - drag.dy);
+    clampObjectToModule(o);
+    render();
+  }
+  else if (drag.type === "resize-object") {
+    const m = getActiveModule(); if (!m) return;
+    const o = findObjectById(drag.id); if (!o) return;
+    let nx = drag.startX, ny = drag.startY, nw = drag.startW, nh = drag.startH;
+    const rx = pos.x - m.x, ry = pos.y - m.y;
+    const dx = rx - drag.startX, dy = ry - drag.startY;
+    switch(drag.handle){
+      case "nw": nx = drag.startX + dx; ny = drag.startY + dy; nw = drag.startW - dx; nh = drag.startH - dy; break;
+      case "ne": ny = drag.startY + dy; nw = drag.startW + dx; nh = drag.startH - dy; break;
+      case "sw": nx = drag.startX + dx; nw = drag.startW - dx; nh = drag.startH + dy; break;
+      case "se": nw = drag.startW + dx; nh = drag.startH + dy; break;
+      case "n":  ny = drag.startY + dy; nh = drag.startH - dy; break;
+      case "s":  nh = drag.startH + dy; break;
+      case "w":  nx = drag.startX + dx; nw = drag.startW - dx; break;
+      case "e":  nw = drag.startW + dx; break;
+    }
+    o.x = snap(nx); o.y = snap(ny); o.w = snap(nw); o.h = snap(nh);
+    clampObjectToModule(o);
+    render();
+  }
+  else if (drag.type === "move-cable-point") {
+    const m = getActiveModule(); if (!m) return;
+    const c = findObjectById(drag.id); if (!c || !c.points) return;
+    const rx = pos.x - m.x - drag.dx, ry = pos.y - m.y - drag.dy;
+    c.points[drag.pointIndex].x = snap(rx);
+    c.points[drag.pointIndex].y = snap(ry);
+    render();
+  }
+  else if (drag.type === "move-cable") {
+    const m = getActiveModule(); if (!m) return;
+    const c = findObjectById(drag.id); if (!c || !c.points) return;
+    const dx = pos.x - drag.lastX, dy = pos.y - drag.lastY;
+    for (const p of c.points) { p.x = snap(p.x + dx); p.y = snap(p.y + dy); }
+    drag.lastX = pos.x; drag.lastY = pos.y;
     render();
   }
 });
 
-$("#btn-delete-cable").addEventListener("click", () => {
-  if (state.selectedId) {
-    const objects = getActiveObjects();
-    const cable = objects.find(o=>o.id===state.selectedId && o.type === "cable");
-    if (cable) {
-      const activeModule = getActiveModule();
-      if (activeModule) {
-        saveToHistory(); // Save state before deletion
-        activeModule.objects = activeModule.objects.filter(o=>o.id!==state.selectedId);
-        state.selectedId = null;
-        saveState();
-        render();
-      }
-    }
-  }
+canvas.addEventListener("mouseup", (e) => {
+  if (view.isPanning && e.button === 2) { view.isPanning = false; return; }
+  if (drag) { saveState(); drag = null; }
 });
 
-// Undo/Redo button event listeners
-$("#btn-undo").addEventListener("click", undo);
-$("#btn-redo").addEventListener("click", redo);
 
-
-// Function to update cable tools visibility
-function updateCableToolsVisibility() {
-  const cableTools = $("#cable-tools");
-  if (!cableTools) return;
-  
-  const objects = getActiveObjects();
-  const selectedObj = objects.find(o=>o.id===state.selectedId);
-  
-  if (selectedObj && selectedObj.type === "cable") {
-    cableTools.style.display = "block";
+// --------------------------- Cable tools buttons (optional in UI) ---------------------------
+$("#btn-add-cable-point")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  const c = findObjectById(state.selectedId);
+  if (!c || c.type !== "cable") return;
+  saveToHistory();
+  // add a point near the center of last segment or default center
+  if (c.points.length >= 2) {
+    const p1 = c.points[c.points.length - 2], p2 = c.points[c.points.length - 1];
+    c.points.push({ x: snap((p1.x + p2.x)/2), y: snap((p1.y + p2.y)/2) });
   } else {
-    cableTools.style.display = "none";
+    c.points.push({ x: snap(m.w/2), y: snap(m.h/2) });
+  }
+  saveState(); render();
+});
+
+$("#btn-remove-cable-point")?.addEventListener("click", () => {
+  const c = findObjectById(state.selectedId);
+  if (!c || c.type !== "cable" || !c.points?.length) return;
+  saveToHistory();
+  c.points.pop();
+  saveState(); render();
+});
+
+$("#btn-delete-cable")?.addEventListener("click", () => {
+  const m = getActiveModule(); if (!m) return;
+  const c = findObjectById(state.selectedId);
+  if (!c || c.type !== "cable") return;
+  saveToHistory();
+  m.objects = m.objects.filter(o => o.id !== c.id);
+  state.selectedId = null;
+  saveState(); render();
+});
+
+// --------------------------- Init ---------------------------
+render();
+// ========================= AI PANEL HOOKS ========================= //
+// DOM вузли
+const btnAI = document.getElementById("btn-ai");
+const aiPanel = document.getElementById("ai-floating-panel");
+const btnCloseAI = document.getElementById("btn-close-ai");
+const btnAnalyze = document.getElementById("btn-analyze");
+const aiSourceSel = document.getElementById("ai-source");
+const aiList = document.getElementById("ai-suggestions");
+
+// Відкрити/закрити панель
+btnAI?.addEventListener("click", () => aiPanel?.classList.add("visible"));
+btnCloseAI?.addEventListener("click", () => aiPanel?.classList.remove("visible"));
+
+// Рендер підказок у списку
+function renderAISuggestions(list) {
+  if (!aiList) return;
+  aiList.innerHTML = "";
+  for (const it of list) {
+    const li = document.createElement("li");
+    li.textContent = it.msg || String(it);
+    li.className = `suggestion-${it.type || "hint"}`; // error|warn|hint
+    aiList.appendChild(li);
   }
 }
 
-// Wrap render to update cable tools visibility
-const originalRender = render;
-render = function() {
-  originalRender();
-};
+// Локальна простенька “евристична” перевірка — без зовнішнього бекенда
+function validateLayoutLocal() {
+  const m = getActiveModule();
+  if (!m) return [{ type: "error", msg: "No active module." }];
 
-// initial draw
-loadState();
-renderModuleList();
-render();
+  const objects = (m.objects || []).filter(o => o.type !== "cable");
+  const out = [];
 
-document.addEventListener("DOMContentLoaded", () => {
-  const aiPanel = document.getElementById("ai-floating-panel");
-  const btnAI = document.getElementById("btn-ai");
-  const btnCloseAI = document.getElementById("btn-close-ai");
+  // 1) Мінімальна «стартова» рекомендація
+  if (objects.length === 0) {
+    out.push({ type: "hint", msg: "Add at least a Bed and a Panel to start a functional layout." });
+  }
 
-  btnAI.addEventListener("click", () => {
-    aiPanel.classList.toggle("visible");
-  });
+  // 2) Вільний простір ≥ 30%
+  const total = m.w * m.h;
+  const occ = objects.reduce((s, o) => s + (o.w * o.h), 0);
+  const freeRatio = (total - occ) / total;
+  if (freeRatio < 0.30) {
+    out.push({ type: "warn", msg: `Only ${Math.round(freeRatio*100)}% free space. Keep ≥ 30% for crew movement.` });
+  }
 
-  btnCloseAI.addEventListener("click", () => {
-    aiPanel.classList.remove("visible");
-  });
+  // 3) Не торкатися стін (кліренс 20 px)
+  const clearance = 20;
+  for (const o of objects) {
+    if (o.x < clearance || o.y < clearance || (o.x + o.w) > (m.w - clearance) || (o.y + o.h) > (m.h - clearance)) {
+      out.push({ type: "warn", msg: `${(CATALOG[o.type]?.name || o.type)} is too close to walls. Keep ${clearance}px.` });
+    }
+  }
+
+  // 4) Набір «обов’язкових» зон (кабінет/кухня/приватний простір/фітнес)
+  const need = [
+    ["cabinet", "Cabinet for storage"],
+    ["kitchen", "Kitchen for food preparation"],
+    ["private", "Private Space for well-being"],
+    ["exercise", "Exercise area for physical health"]
+  ];
+  for (const [key, text] of need) {
+    if (!objects.some(o => o.type === key)) {
+      out.push({ type: "hint", msg: `Consider adding ${text}.` });
+    }
+  }
+
+  // 5) Кухня ближче до Dining (за наявності)
+  const kitchens = objects.filter(o => o.type === "kitchen");
+  const dinings = objects.filter(o => o.type === "dining");
+  if (kitchens.length && dinings.length) {
+    for (const k of kitchens) {
+      const cx = k.x + k.w/2, cy = k.y + k.h/2;
+      const dmin = Math.min(...dinings.map(d => Math.hypot(cx - (d.x + d.w/2), cy - (d.y + d.h/2))));
+      if (dmin > 200) out.push({ type: "hint", msg: "Place Kitchen closer to Dining for efficiency." });
+    }
+  }
+
+  // 6) Ліжко подалі від панелей (шум/світло)
+  const beds = objects.filter(o => o.type === "bed");
+  const panels = objects.filter(o => o.type === "panel");
+  for (const b of beds) {
+    const bx = b.x + b.w/2, by = b.y + b.h/2;
+    for (const p of panels) {
+      const d = Math.hypot(bx - (p.x + p.w/2), by - (p.y + p.h/2));
+      if (d < 120) out.push({ type: "hint", msg: "Place Bed farther from Panel to reduce noise/light." });
+    }
+  }
+
+  return out;
+}
+
+// Кнопка «Analyze with AI»
+btnAnalyze?.addEventListener("click", async () => {
+  const src = aiSourceSel?.value || "local";
+  try {
+    if (src === "local") {
+      const suggestions = validateLayoutLocal();
+      renderAISuggestions(suggestions);
+    } else {
+      // Проксі на твій бекенд (налаштуй свій server.js, якщо потрібно)
+      const layout = {
+        modules: state.modules,
+        activeModule: getActiveModule(),
+        objects: getActiveObjects()
+      };
+      const res = await fetch("http://localhost:5000/api/ai/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout })
+      });
+      const suggestions = await res.json();
+      renderAISuggestions(suggestions);
+    }
+  } catch (e) {
+    renderAISuggestions([{ type: "error", msg: "AI proxy not reachable. Use Local or start your server." }]);
+  }
 });
+
+function drawStarryBackground() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // скидаємо масштаб і панорамування
+
+  // малюємо чорний фон на всю канву
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // додаємо прості “зірки”
+  const starsCount = 200;
+  for (let i = 0; i < starsCount; i++) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const r = Math.random() * 1.5;
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore(); // повертаємо трансформацію
+}
