@@ -1,11 +1,13 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Habitat Layout Creator — MVP</title>
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
   <div id="app">
     <aside class="sidebar">
@@ -20,7 +22,7 @@
             <button class="item" data-type="cable">🧵 Cable (polyline)</button>
           </div>
         </div>
-        
+
         <div class="category-group">
           <button class="category-btn" data-category="food">🍽️ Food Systems</button>
           <div class="category-menu" id="food-menu" style="display: none;">
@@ -29,7 +31,7 @@
             <button class="item" data-type="storage">📦 Storage</button>
           </div>
         </div>
-        
+
         <div class="category-group">
           <button class="category-btn" data-category="life">🌬️ Life Support</button>
           <div class="category-menu" id="life-menu" style="display: none;">
@@ -37,7 +39,7 @@
             <button class="item" data-type="monitor">📊 Monitor</button>
           </div>
         </div>
-        
+
         <div class="category-group">
           <button class="category-btn" data-category="exercise">💪 Exercise & Recreation</button>
           <div class="category-menu" id="exercise-menu" style="display: none;">
@@ -45,7 +47,7 @@
             <button class="item" data-type="recreation">🎮 Recreation</button>
           </div>
         </div>
-        
+
         <div class="category-group">
           <button class="category-btn" data-category="psychology">🧠 Psychology & Privacy</button>
           <div class="category-menu" id="psychology-menu" style="display: none;">
@@ -58,14 +60,14 @@
       <div class="modules-panel">
         <div id="module-list"></div>
         <div class="module-templates">
-          <label>Template:</label>
+          <!-- <label>Template:</label>
           <select id="module-template">
             <option value="standard">Standard</option>
             <option value="compact">Compact</option>
             <option value="large">Large</option>
             <option value="wide">Wide</option>
             <option value="tall">Tall</option>
-          </select>
+          </select> -->
         </div>
         <button id="btn-add-module">➕ Add Module</button>
         <button id="btn-edit-module" style="display: none;">✏️ Edit Module</button>
@@ -83,7 +85,7 @@
         <button id="btn-undo">↶ Undo (Ctrl+Z)</button>
         <button id="btn-redo">↷ Redo (Ctrl+Y)</button>
       </div>
-      <h2>Cable Tools</h2>
+      <!-- <h2>Cable Tools</h2> -->
       <div class="tools" id="cable-tools" style="display: none;">
         <button id="btn-add-cable-point" class="tool">➕ Add Point (+)</button>
         <button id="btn-remove-cable-point" class="tool">➖ Remove Point (-)</button>
@@ -97,8 +99,8 @@
           <div>Issues: <span id="issue-count">0</span></div>
         </div>
       </div>
-      <h2>AI Assistant</h2>
-<div class="ai-panel"> ... </div>
+      <!-- <h2>AI Assistant</h2>
+      <div class="ai-panel"> ... </div> -->
     </aside>
     <main>
       <header>
@@ -114,17 +116,18 @@
         </div>
       </header>
       <section class="canvas-wrap">
-        <canvas id="canvas" width="1100" height="700"></canvas>
+        <canvas id="canvas"></canvas>
       </section>
+
       <footer>
         <small>
-          Objects snap to grid. Tips: drag from catalog, select with click, rotate (R), delete (Del), undo (Ctrl+Z). 
+          Objects snap to grid. Tips: drag from catalog, select with click, rotate (R), delete (Del), undo (Ctrl+Z).
           Cable tools: select cable to edit points, use +/- to add/remove points, drag points to move them.
         </small>
       </footer>
     </main>
   </div>
-  
+
   <!-- Module Configuration Modal -->
   <div id="module-modal" class="modal">
     <div class="modal-content">
@@ -137,7 +140,7 @@
           <label for="module-name">Module Name:</label>
           <input type="text" id="module-name" value="New Module" placeholder="Enter module name">
         </div>
-        
+
         <div class="form-group">
           <label for="module-template-select">Template:</label>
           <select id="module-template-select">
@@ -149,19 +152,19 @@
             <option value="custom">Custom Size</option>
           </select>
         </div>
-        
+
         <div class="form-group" id="custom-size-group" style="display: none;">
           <label for="module-width">Width:</label>
           <input type="number" id="module-width" min="200" max="2000" value="1000">
           <label for="module-height">Height:</label>
           <input type="number" id="module-height" min="150" max="1500" value="600">
         </div>
-        
+
         <div class="form-group">
           <label for="module-color">Module Color:</label>
           <input type="color" id="module-color" value="#0d1b26">
         </div>
-        
+
         <div class="form-group">
           <label for="module-type">Module Type:</label>
           <select id="module-type">
@@ -173,7 +176,7 @@
             <option value="medical">🏥 Medical Bay</option>
           </select>
         </div>
-        
+
       </div>
       <div class="modal-footer">
         <button id="btn-create-module" class="btn-primary">Create Module</button>
@@ -181,7 +184,7 @@
       </div>
     </div>
   </div>
-  
+
   <!-- Module Edit Modal -->
   <div id="edit-modal" class="modal">
     <div class="modal-content">
@@ -194,22 +197,22 @@
           <label for="edit-module-name">Module Name:</label>
           <input type="text" id="edit-module-name" placeholder="Enter module name">
         </div>
-        
+
         <div class="form-group">
           <label for="edit-module-width">Width:</label>
           <input type="number" id="edit-module-width" min="200" max="2000">
         </div>
-        
+
         <div class="form-group">
           <label for="edit-module-height">Height:</label>
           <input type="number" id="edit-module-height" min="150" max="1500">
         </div>
-        
+
         <div class="form-group">
           <label for="edit-module-color">Module Color:</label>
           <input type="color" id="edit-module-color">
         </div>
-        
+
         <div class="form-group">
           <label for="edit-module-type">Module Type:</label>
           <select id="edit-module-type">
@@ -228,26 +231,27 @@
       </div>
     </div>
   </div>
-  
-<div id="ai-floating-panel">
-  <div class="ai-header">
-    <h2>AI Assistant</h2>
-    <button id="btn-close-ai">✖</button>
+
+  <div id="ai-floating-panel">
+    <div class="ai-header">
+      <h2>AI Assistant</h2>
+      <button id="btn-close-ai">✖</button>
+    </div>
+    <div class="ai-panel">
+      <label>Source:
+        <select id="ai-source">
+          <option value="local" selected>Local</option>
+          <option value="gemini">Gemini (proxy)</option>
+        </select>
+      </label>
+      <button id="btn-analyze">Analyze with AI</button>
+      <ul id="ai-suggestions"></ul>
+    </div>
   </div>
-  <div class="ai-panel">
-    <label>Source:
-      <select id="ai-source">
-        <option value="local" selected>Local</option>
-        <option value="gemini">Gemini (proxy)</option>
-      </select>
-    </label>
-    <button id="btn-analyze">Analyze with AI</button>
-    <ul id="ai-suggestions"></ul>
-  </div>
-</div>
 
 
 
   <script src="main.js"></script>
 </body>
+
 </html>
