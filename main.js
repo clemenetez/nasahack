@@ -579,7 +579,7 @@ $("#btn-delete")?.addEventListener("click", () => {
 });
 
 $("#btn-export")?.addEventListener("click", () => {
-  const data = JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId, version: "2.0" }, null, 2);
+  const data = JSON.stringify({ modules: state.modules, activeModuleId: state.activeModuleId, mission: state.mission, version: "2.1" }, null, 2);
   const blob = new Blob([data], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -597,12 +597,20 @@ $("#import-file")?.addEventListener("change", async (e) => {
     if (data.modules) {
       state.modules = data.modules;
       state.activeModuleId = data.activeModuleId || state.modules[0]?.id || "module-1";
+      if (data.mission) {
+        state.mission = Object.assign({}, state.mission, data.mission);
+        document.getElementById("crew-size") && (document.getElementById("crew-size").value = String(state.mission.crewSize||4));
+        document.getElementById("deck-height") && (document.getElementById("deck-height").value = String(state.mission.deckHeightM||2.4));
+        document.getElementById("sizing-mode") && (document.getElementById("sizing-mode").value = String(state.mission.sizingMode||"manual"));
+        document.getElementById("zoning-dist") && (document.getElementById("zoning-dist").value = String(state.mission.zoningMinDistM||2));
+      }
     } else if (data.objects) {
       // legacy
       state.modules[0].objects = data.objects;
     }
     state.selectedId = null; state.cableDraft = null;
     saveState(); renderModuleList(); render();
+    try { showToast("Layout loaded"); } catch(_) {}
   } catch { alert("Invalid JSON"); }
 });
 
@@ -1138,6 +1146,7 @@ canvas.addEventListener("mousedown", (e) => {
     view.isPanning = true;
     view.panStartX = e.clientX - view.offsetX;
     view.panStartY = e.clientY - view.offsetY;
+    canvas.style.cursor = "grabbing";
     return;
   }
   if (e.button !== 0) return;
@@ -1388,6 +1397,7 @@ canvas.addEventListener("mousemove", (e) => {
 canvas.addEventListener("mouseup", (e) => {
   if (view.isPanning && e.button === 2) { view.isPanning = false; return; }
   if (drag) { saveState(); drag = null; }
+  if (!view.isPanning) canvas.style.cursor = "default";
 });
 
 
