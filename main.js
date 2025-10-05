@@ -721,9 +721,9 @@ function drawObjects() {
   const objs = m.objects;
 
   for (const o of objs) {
-    if (o.type === "cable") { 
-      drawCable(o, m); 
-      continue; 
+    if (o.type === "cable") {
+      drawCable(o, m);
+      continue;
     }
 
     const cat = CATALOG[o.type] || { name: o.type, color: "#999" };
@@ -731,7 +731,7 @@ function drawObjects() {
 
     // 1) базова підкладка (як було)
     ctx.fillStyle = cat.color;
-    ctx.strokeStyle = "#0b0b0b"; 
+    ctx.strokeStyle = "#0b0b0b";
     ctx.lineWidth = 1.5;
     ctx.fillRect(gx, gy, o.w, o.h);
     ctx.strokeRect(gx, gy, o.w, o.h);
@@ -752,7 +752,7 @@ function drawObjects() {
     // 4) рамка виділення + хендли
     if (state.selectedId === o.id) {
       ctx.save();
-      ctx.strokeStyle = "#ffd166"; 
+      ctx.strokeStyle = "#ffd166";
       ctx.lineWidth = 2;
       ctx.strokeRect(gx - 2, gy - 2, o.w + 4, o.h + 4);
       drawResizeHandlesForRect(gx, gy, o.w, o.h);
