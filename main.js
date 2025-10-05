@@ -51,6 +51,46 @@ const CATALOG = {
   private:      { w: 100, h: 80, name: "Private Space", color: "#6c5ce7" },
   communication:{ w: 120, h: 60, name: "Comm Station",  color: "#00b894" }
 };
+// === IMAGE PRELOAD (icons for objects) ===
+const itemImages = {}; // cache: type -> HTMLImageElement
+
+// Відповідність типів з CATALOG → PNG-файлів у /images
+const imageMap = {
+  // Basic
+  bed: "bed.png",
+  panel: "panel.png",
+  cabinet: "cabinet.png",
+  cable: null, // для cable малюємо лінії — іконка не потрібна
+
+  // Food
+  kitchen: "kitchen.png",
+  dining: "dining.png",
+  storage: "storage.png",
+
+  // Life support
+  atmosphere: "atmosphere.png",
+  monitor: "monitor.png",
+
+  // Exercise & Recreation
+  exercise: "exercise.png",
+  recreation: "recreation.png",
+
+  // Psychology
+  private: "private.png",
+  communication: "communication.png"
+};
+
+// Препроад усіх іконок, ререндер після загрузки
+Object.keys(imageMap).forEach(type => {
+  const file = imageMap[type];
+  if (!file) return;              // пропускаємо типи без картинки
+  const img = new Image();
+  img.src = `images/${file}`;     // поклади PNG у /images поряд із index.html
+  img.addEventListener("load",  () => { try { render(); } catch (_) {} });
+  img.addEventListener("error", () => console.warn(`⚠️ Image not found: ${file}`));
+  itemImages[type] = img;
+});
+
 
 // --------------------------- Helpers ---------------------------
 const $  = (sel) => document.querySelector(sel);
@@ -605,33 +645,48 @@ function drawHabitat() {
 function drawObjects() {
   const m = getActiveModule(); if (!m) return;
   const objs = m.objects;
+
   for (const o of objs) {
-    if (o.type === "cable") { drawCable(o, m); continue; }
+    if (o.type === "cable") { 
+      drawCable(o, m); 
+      continue; 
+    }
 
     const cat = CATALOG[o.type] || { name: o.type, color: "#999" };
     const gx = m.x + o.x, gy = m.y + o.y;
 
+    // 1) базова підкладка (як було)
     ctx.fillStyle = cat.color;
-    ctx.strokeStyle = "#0b0b0b"; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#0b0b0b"; 
+    ctx.lineWidth = 1.5;
     ctx.fillRect(gx, gy, o.w, o.h);
     ctx.strokeRect(gx, gy, o.w, o.h);
 
-    // label
+    // 2) іконка, якщо є
+    const img = itemImages[o.type];
+    if (img && img.complete && img.naturalWidth) {
+      // Вписуємо в область об'єкта; за бажанням додай відступи
+      // const pad = 6; ctx.drawImage(img, gx+pad, gy+pad, o.w-2*pad, o.h-2*pad);
+      ctx.drawImage(img, gx, gy, o.w, o.h);
+    }
+
+    // 3) напис (залишив як було; якщо хочеш мінімалістично — просто прибери ці три рядки)
     ctx.fillStyle = "#e6e6e6";
     ctx.font = "12px system-ui";
     ctx.fillText(cat.name, gx + 6, gy + 16);
 
-    // selection
+    // 4) рамка виділення + хендли
     if (state.selectedId === o.id) {
       ctx.save();
-      ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2;
+      ctx.strokeStyle = "#ffd166"; 
+      ctx.lineWidth = 2;
       ctx.strokeRect(gx - 2, gy - 2, o.w + 4, o.h + 4);
       drawResizeHandlesForRect(gx, gy, o.w, o.h);
       ctx.restore();
     }
   }
 
-  // cable draft (dashed)
+  // пунктир для чернетки кабелю (без змін)
   if (state.cableDraft?.points?.length) {
     const pts = state.cableDraft.points;
     ctx.save();
@@ -649,6 +704,7 @@ function drawObjects() {
     ctx.restore();
   }
 }
+
 
 function drawCable(cable, m) {
   const pts = cable.points || [];
