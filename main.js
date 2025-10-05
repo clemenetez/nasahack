@@ -31,14 +31,14 @@ const MODULE_TEMPLATES = {
 
 const CATALOG = {
   // Basic
-  bed:      { w: 160, h: 80,  name: "Bed",      color: "#7aa2f7" },
+  bed:      { w: 160, h: 80,  name: "Bedroom",      color: "#7aa2f7" },
   panel:    { w: 140, h: 40,  name: "Panel",    color: "#9ece6a" },
   cabinet:  { w: 100, h: 100, name: "Cabinet",  color: "#f7768e" },
   cable:    {               name: "Cable",     color: "#e0af68" }, // polyline
 
   // Food
   kitchen:  { w: 200, h: 120, name: "Kitchen",  color: "#ff9f43" },
-  dining:   { w: 180, h: 100, name: "Dining",   color: "#ff6b6b" },
+  dining:   { w: 180, h: 100, name: "Dining room",   color: "#ff6b6b" },
   storage:  { w: 120, h: 80,  name: "Storage",  color: "#a55eea" },
 
   // Life support
@@ -1697,35 +1697,209 @@ function showToast(msg){
 document.getElementById("btn-save-params")?.addEventListener("click", () => {
   saveState(); showToast("Mission parameters saved");
 });
+// ===== Helpers for adaptive layout (drop-in) =====
+function m2u(m){ return (typeof UNITS_PER_METER!=='undefined'? UNITS_PER_METER:100) * m; }
+function u2m(u){ return u / (typeof UNITS_PER_METER!=='undefined'? UNITS_PER_METER:100); }
 
-// Presets
+function expectedSizeU(type){
+  // Якщо є NASA-рекомендації — беремо їх, інакше дефолти каталогу
+  let wU, hU;
+  if (typeof recommendSizeMetersFor === 'function' && state?.mission?.sizingMode === 'nasa') {
+    const rec = recommendSizeMetersFor(type, state?.mission);
+    if (rec && rec.w && rec.d) { wU = m2u(rec.w); hU = m2u(rec.d); }
+  }
+  if (!wU || !hU){
+    const cat = (typeof CATALOG!=='undefined' ? CATALOG[type] : null) || {};
+    wU = cat.w ?? GRID*4;
+    hU = cat.h ?? GRID*3;
+  }
+  return { w: Math.max(GRID*2, wU), h: Math.max(GRID*2, hU) };
+}
+
+// Рядкова розкладка: покласти items[] у ряд з переносом
+function placeRow(items, m, startX, startY, maxWidth, stepX, stepY){
+  let cx = startX, cy = startY;
+  for(const t of items){
+    addObject(t, cx, cy);
+    cx += stepX;
+    if (cx + GRID > maxWidth){ cx = startX; cy += stepY; }
+  }
+  return { nextX: cx, nextY: cy };
+}
+
+// ===== Presets (re-layout only) =====
 document.getElementById("preset-crew4-lunar")?.addEventListener("click", () => {
   const m = getActiveModule(); if (!m) return;
-  state.mission.crewSize = 4; state.mission.deckHeightM = 2.4; state.mission.sizingMode = "nasa";
-  document.getElementById("crew-size").value = "4";
-  document.getElementById("deck-height").value = "2.4";
-  document.getElementById("sizing-mode").value = "nasa";
+  saveToHistory();
+
+  // Mission params (UI sync)
+  state.mission.crewSize = 4; state.mission.deckHeightM = 2.4; state.mission.sizingMode = "nasa"; state.mission.zoningMinDistM = 1.5;
+  const cs = document.getElementById("crew-size"); cs && (cs.value = "4");
+  const dh = document.getElementById("deck-height"); dh && (dh.value = "2.4");
+  const sm = document.getElementById("sizing-mode"); sm && (sm.value = "nasa");
+  const zd = document.getElementById("zoning-dist"); zd && (zd.value = "1.5");
+
+  // модуль лишаємо як у тебе:
+  resizeModule(m.id, 1600, 1200);
   m.objects = [];
-  addObject("bed", m.x + GRID, m.y + GRID);
-  addObject("private", m.x + GRID*3, m.y + GRID);
-  addObject("kitchen", m.x + GRID, m.y + GRID*6);
-  addObject("dining", m.x + GRID*6, m.y + GRID*6);
-  addObject("exercise", m.x + GRID*10, m.y + GRID*2);
-  saveState(); render();
+
+  // Параметри відступів
+  const pad = GRID * 2;
+  const zPad = m2u(state.mission.zoningMinDistM || 1.5); // зонінг-буфер
+  const gutter = Math.max(GRID*2, Math.floor(zPad));      // поперечний проміжок
+  const startX = m.x + pad;
+  const startY = m.y + pad;
+  const rightEdge = m.x + m.w - pad;
+
+  // Оцінимо типові габарити (у юнітах)
+  const bedS = expectedSizeU("bed");
+  const privS = expectedSizeU("private");
+  const sharedS = [
+    expectedSizeU("kitchen"), expectedSizeU("dining"),
+    expectedSizeU("exercise"), expectedSizeU("storage"),
+    expectedSizeU("storage"), expectedSizeU("recreation"),
+    expectedSizeU("communication")
+  ];
+  const techS = [ expectedSizeU("panel"), expectedSizeU("atmosphere"), expectedSizeU("monitor") ];
+
+  // Кроки сітки від найбільших у групі
+  const quietStepX = Math.max(bedS.w, privS.w) + gutter;
+  const quietStepY = Math.max(bedS.h, privS.h) + gutter;
+  const sharedStepX = Math.max(...sharedS.map(s=>s.w)) + gutter;
+  const sharedStepY = Math.max(...sharedS.map(s=>s.h)) + gutter;
+  const techStepY = Math.max(...techS.map(s=>s.h)) + gutter;
+
+  // ===== Quiet zone (верхня частина): 2×2 beds + 2×2 private праворуч =====
+  // Ліжка 2×2
+  let cx = startX, cy = startY;
+  addObject("bed", cx, cy);
+  addObject("bed", cx + quietStepX, cy);
+  addObject("bed", cx, cy + quietStepY);
+  addObject("bed", cx + quietStepX, cy + quietStepY);
+
+  // Private 2×2 поряд
+  const privX = startX + quietStepX*2 + gutter;
+  addObject("private", privX, cy);
+  addObject("private", privX + quietStepX, cy);
+  addObject("private", privX, cy + quietStepY);
+  addObject("private", privX + quietStepX, cy + quietStepY);
+
+  // ===== Shared (нижня частина) двома рядами =====
+  const sharedTopY = m.y + Math.max(m.h * 0.55, (cy + quietStepY*2 + pad));
+  let sx = startX, sy = sharedTopY;
+
+  // Перший ряд: kitchen, dining, exercise
+  ["kitchen","dining","exercise"].forEach(t => {
+  addObject(t, sx, sy);
+  if (t === "exercise") {
+    const last = m.objects[m.objects.length - 1];
+    // базовий рекомендований розмір в юнітах
+    const ex = expectedSizeU("exercise");
+    const mul = 1.7; // ЗБІЛЬШЕННЯ x1.5 (підбери як треба)
+    last.w = Math.round(ex.w * mul);
+    last.h = Math.round(ex.h * mul);
+  }
+  sx += sharedStepX;
 });
+
+  // Другий ряд: storage, storage, recreation, communication
+  sx = startX; sy += sharedStepY;
+  ["storage","storage","recreation","communication"].forEach(t => { addObject(t, sx, sy); sx += sharedStepX; });
+
+  // ===== Technical column справа (panel/atmosphere/monitor) =====
+  const tx = rightEdge - Math.max(...techS.map(s=>s.w));
+  const ty = startY;
+  addObject("panel", tx, ty);
+  addObject("atmosphere", tx, ty + techStepY);
+  addObject("monitor", tx, ty + techStepY*2);
+
+  saveState(); render(); showToast("Preset applied: Crew-4 Lunar");
+});
+
 document.getElementById("preset-crew6-mars")?.addEventListener("click", () => {
   const m = getActiveModule(); if (!m) return;
-  state.mission.crewSize = 6; state.mission.deckHeightM = 2.7; state.mission.sizingMode = "nasa";
-  document.getElementById("crew-size").value = "6";
-  document.getElementById("deck-height").value = "2.7";
-  document.getElementById("sizing-mode").value = "nasa";
+  saveToHistory();
+
+  // Mission params (UI sync)
+  state.mission.crewSize = 6; state.mission.deckHeightM = 2.4; state.mission.sizingMode = "nasa"; state.mission.zoningMinDistM = 1.8;
+  const cs = document.getElementById("crew-size"); cs && (cs.value = "6");
+  const dh = document.getElementById("deck-height"); dh && (dh.value = "2.4");
+  const sm = document.getElementById("sizing-mode"); sm && (sm.value = "nasa");
+  const zd = document.getElementById("zoning-dist"); zd && (zd.value = "1.8");
+
+  // модуль лишаємо як у тебе:
+  resizeModule(m.id, 2600, 1400);
   m.objects = [];
-  addObject("bed", m.x + GRID, m.y + GRID);
-  addObject("bed", m.x + GRID*4, m.y + GRID);
-  addObject("private", m.x + GRID*8, m.y + GRID);
-  addObject("kitchen", m.x + GRID, m.y + GRID*8);
-  addObject("dining", m.x + GRID*7, m.y + GRID*8);
-  addObject("exercise", m.x + GRID*12, m.y + GRID*2);
-  addObject("storage", m.x + GRID*12, m.y + GRID*8);
-  saveState(); render();
+
+  // Параметри відступів
+  const pad = GRID * 2;
+  const zPad = m2u(state.mission.zoningMinDistM || 1.8);
+  const gutter = Math.max(GRID*2, Math.floor(zPad));
+  const startX = m.x + pad;
+  const startY = m.y + pad;
+  const rightEdge = m.x + m.w - pad;
+
+  // Типові розміри
+  const bedS = expectedSizeU("bed");
+  const privS = expectedSizeU("private");
+  const sharedTypesTop  = ["kitchen","dining","exercise","exercise"];
+  const sharedTypesBtm  = ["storage","storage","storage","recreation","communication"];
+  const techTypes       = ["panel","panel","atmosphere","monitor"];
+
+  const sharedTopS = sharedTypesTop.map(t=>expectedSizeU(t));
+  const sharedBtmS = sharedTypesBtm.map(t=>expectedSizeU(t));
+  const techS      = techTypes.map(t=>expectedSizeU(t));
+
+  const quietStepX = Math.max(bedS.w, privS.w) + gutter;
+  const quietStepY = Math.max(bedS.h, privS.h) + gutter;
+  const sharedStepX = Math.max(
+    Math.max(...sharedTopS.map(s=>s.w)),
+    Math.max(...sharedBtmS.map(s=>s.w))
+  ) + gutter;
+  const sharedStepY = Math.max(
+    Math.max(...sharedTopS.map(s=>s.h)),
+    Math.max(...sharedBtmS.map(s=>s.h))
+  ) + gutter;
+  const techStepY = Math.max(...techS.map(s=>s.h)) + gutter;
+
+  // ===== Quiet zone (верх): 3×2 ліжка + 3×2 приватні поряд =====
+  // Beds 3×2
+  let cx = startX, cy = startY;
+  addObject("bed", cx, cy);
+  addObject("bed", cx + quietStepX, cy);
+  addObject("bed", cx + quietStepX*2, cy);
+  addObject("bed", cx, cy + quietStepY);
+  addObject("bed", cx + quietStepX, cy + quietStepY);
+  addObject("bed", cx + quietStepX*2, cy + quietStepY);
+
+  // Privates 3×2 праворуч
+  const privX = startX + quietStepX*3 + gutter;
+  addObject("private", privX, cy);
+  addObject("private", privX + quietStepX, cy);
+  addObject("private", privX + quietStepX*2, cy);
+  addObject("private", privX, cy + quietStepY);
+  addObject("private", privX + quietStepX, cy + quietStepY);
+  addObject("private", privX + quietStepX*2, cy + quietStepY);
+
+  // ===== Shared (нижня частина) двома рядами =====
+  const sharedTopY = m.y + Math.max(m.h * 0.56, (cy + quietStepY*2 + pad));
+  let sx = startX, sy = sharedTopY;
+
+  // Верхній ряд: kitchen, dining, exercise, exercise
+  ["kitchen","dining","exercise","exercise"].forEach(t => { addObject(t, sx, sy); sx += sharedStepX; });
+
+  // Нижній ряд: storage×3, recreation, communication
+  sx = startX; sy += sharedStepY;
+  ["storage","storage","storage","recreation","communication"].forEach(t => { addObject(t, sx, sy); sx += sharedStepX; });
+
+  // ===== Technical column справа (panel, panel, atmosphere, monitor) =====
+  const tx = rightEdge - Math.max(...techS.map(s=>s.w));
+  const ty = startY;
+  addObject("panel", tx, ty);
+  addObject("panel", tx, ty + techStepY);
+  addObject("atmosphere", tx, ty + techStepY*2);
+  addObject("monitor", tx, ty + techStepY*3);
+
+  saveState(); render(); showToast("Preset applied: Crew-6 Mars");
 });
+
